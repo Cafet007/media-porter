@@ -187,8 +187,8 @@ def _is_system_file(path: Path) -> bool:
     name = path.name
     parts = [p.upper() for p in path.parts]
 
-    # Sony proxy thumbnails: PRIVATE/M4ROOT/SUB/*.JPG
-    if "SUB" in parts and "M4ROOT" in parts:
+    # Sony proxy/thumbnail folders under M4ROOT — never media we want
+    if "M4ROOT" in parts and any(f in parts for f in ("SUB", "THMBNL")):
         return True
 
     # Sony video clip thumbnails: PRIVATE/M4ROOT/CLIP/*.JPG (companion to each .MP4)

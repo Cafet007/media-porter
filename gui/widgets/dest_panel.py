@@ -151,6 +151,12 @@ class DestPanel(QWidget):
             "  2026-03-24/"
         )
 
+    def set_paths(self, photo: str, video: str):
+        """Restore saved paths directly (e.g. from config file)."""
+        self._photo_row.set_path(photo)
+        self._video_row.set_path(video)
+        self._emit_config()
+
     def set_drive_root(self, root: Path):
         """Auto-fill paths when user selects an external drive."""
         logger.info("Destination auto-filled from drive root: %s", root)

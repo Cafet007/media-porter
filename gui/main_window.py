@@ -24,6 +24,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QMetaObject, Q_ARG
 from PySide6.QtGui import QFont
 
 from backend.utils.detector import DriveInfo
+from backend.utils.config import get_dest_paths, save_dest_paths
 from backend.core.scanner import scan_card
 from backend.core.inspector import inspect_all
 from backend.core.dedup import DedupChecker
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 class _Signals(QObject):
     scan_done    = Signal(object, object)        # (ScanResult, new_set)
-    progress     = Signal(int, int, str, int, int)  # (done, total, filename, bytes_done, bytes_total)
+    progress     = Signal(int, int, str, float, float)  # (done, total, filename, bytes_done, bytes_total)
     import_done  = Signal(object)                # ImportResult
     status       = Signal(str)
 
@@ -62,9 +63,11 @@ class MainWindow(QMainWindow):
         self._dest_config: DestinationConfig | None = None
         self._cancel_event = threading.Event()
         self._current_file: str | None = None
+        self._importing = False
 
         self._build_ui()
         self._apply_theme()
+        self._load_saved_config()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -129,7 +132,7 @@ class MainWindow(QMainWindow):
 
     def _build_bottom_bar(self) -> QWidget:
         bar = QWidget()
-        bar.setFixedHeight(64)
+        bar.setFixedHeight(76)
         bar.setStyleSheet("background: #111; border-top: 1px solid #2a2a2a;")
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(16, 0, 16, 0)
@@ -144,7 +147,12 @@ class MainWindow(QMainWindow):
         self._scan_btn.setStyleSheet(self._btn_style("#333", "#444"))
         layout.addWidget(self._scan_btn)
 
-        # Progress bar
+        # Stacked progress bars (overall on top, current file below)
+        progress_col = QWidget()
+        progress_layout = QVBoxLayout(progress_col)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(5)
+
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
@@ -154,7 +162,21 @@ class MainWindow(QMainWindow):
             QProgressBar { background: #2a2a2a; border-radius: 4px; border: none; }
             QProgressBar::chunk { background: #4a9eff; border-radius: 4px; }
         """)
-        layout.addWidget(self._progress, stretch=1)
+        progress_layout.addWidget(self._progress)
+
+        self._file_progress = QProgressBar()
+        self._file_progress.setRange(0, 1000)
+        self._file_progress.setValue(0)
+        self._file_progress.setFixedHeight(5)
+        self._file_progress.setTextVisible(False)
+        self._file_progress.setVisible(False)
+        self._file_progress.setStyleSheet("""
+            QProgressBar { background: #1e1e1e; border-radius: 3px; border: none; }
+            QProgressBar::chunk { background: #2ecc71; border-radius: 3px; }
+        """)
+        progress_layout.addWidget(self._file_progress)
+
+        layout.addWidget(progress_col, stretch=1)
 
         # Import button
         self._import_btn = QPushButton("Import New Files →")
@@ -206,12 +228,21 @@ class MainWindow(QMainWindow):
             self._dest_panel.set_drive_root(drive.mount_point)
             self._set_status(f"Destination set to {drive.label} ({drive.mount_point})")
 
+    def _load_saved_config(self):
+        """Pre-fill destination paths from last session."""
+        paths = get_dest_paths()
+        if paths:
+            photo, video = paths
+            self._dest_panel.set_paths(photo, video)
+            logger.info("Restored dest config from saved config")
+
     def _on_config_changed(self, config: DestinationConfig):
         self._dest_config = config
+        save_dest_paths(config.photo_base, config.video_base)
         logger.debug("Dest config updated: photos=%s  videos=%s", config.photo_base, config.video_base)
 
         # If a scan already ran, re-evaluate the import button now that dest is set
-        if self._scan_result and self._new_set:
+        if not self._importing and self._scan_result and self._new_set:
             new_count = len(self._new_set)
             self._import_btn.setEnabled(new_count > 0)
             self._import_btn.setText(
@@ -314,11 +345,14 @@ class MainWindow(QMainWindow):
             logger.warning("Import blocked — insufficient space: %s", errors)
             return
 
+        self._importing = True
         self._import_btn.setEnabled(False)
         self._scan_btn.setEnabled(False)
         self._cancel_btn.setVisible(True)
         self._cancel_event.clear()
         self._progress.setValue(0)
+        self._file_progress.setValue(0)
+        self._file_progress.setVisible(True)
         self._set_status("Importing...")
         logger.info("Import started: %d new files", len(new_files))
 
@@ -334,11 +368,11 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _on_progress(self, done: int, total: int, filename: str, bytes_done: int, bytes_total: int):
-        # Overall progress = completed files + fraction of current file
+    def _on_progress(self, done: int, total: int, filename: str, bytes_done: float, bytes_total: float):
         file_pct = bytes_done / bytes_total if bytes_total else 1.0
-        overall = (done - 1 + file_pct) / total
+        overall  = (done - 1 + file_pct) / total
         self._progress.setValue(int(overall * 100))
+        self._file_progress.setValue(int(file_pct * 1000))
 
         mb_done  = bytes_done  / 1_048_576
         mb_total = bytes_total / 1_048_576
@@ -371,6 +405,10 @@ class MainWindow(QMainWindow):
         self._cancel_btn.setVisible(False)
         self._cancel_btn.setEnabled(True)
         self._cancel_btn.setText("✕  Cancel")
+
+        self._importing = False
+        self._file_progress.setVisible(False)
+        self._file_progress.setValue(0)
 
         for f, _ in result.failed:
             self._file_table.mark_failed(f.name)

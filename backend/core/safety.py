@@ -13,6 +13,7 @@ Rules enforced:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -158,15 +159,16 @@ def safe_copy(
     src: Path,
     dst: Path,
     bytes_cb: Callable[[int, int], None] | None = None,
-) -> Path:
+) -> tuple[Path, str]:
     """
     Copy src → dst safely:
       - dst drive must have enough free space
       - writes to a temp file first, renames on success (no partial files)
       - never deletes, never moves
       - bytes_cb(bytes_done, total_bytes) called every chunk for progress
+      - computes SHA256 of source during read (no extra I/O)
 
-    Returns the final destination path.
+    Returns (final_dest_path, sha256_hex).
     Raises SafetyError on any violation.
     """
     src = src.resolve()
@@ -196,23 +198,27 @@ def safe_copy(
         os.close(fd)
 
         written = 0
+        hasher = hashlib.sha256()
         with open(src, "rb") as fsrc, open(tmp_path, "wb") as fdst:
             while True:
                 chunk = fsrc.read(_CHUNK)
                 if not chunk:
                     break
                 fdst.write(chunk)
+                hasher.update(chunk)
                 written += len(chunk)
                 if bytes_cb:
                     bytes_cb(written, total_bytes)
+
+        file_hash = hasher.hexdigest()
 
         # Preserve file metadata (timestamps, etc.)
         shutil.copystat(src, tmp_path)
         tmp_path.rename(dst)
         tmp_path = None
 
-        logger.info("Copied: %s → %s", src.name, dst)
-        return dst
+        logger.info("Copied: %s → %s  [sha256: %s…]", src.name, dst, file_hash[:12])
+        return dst, file_hash
 
     except SafetyError:
         raise
