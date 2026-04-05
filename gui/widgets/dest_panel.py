@@ -1,5 +1,6 @@
 """
-Destination Panel — lets user set photo_base and video_base paths.
+Destination Panel — right sidebar for setting photo_base and video_base paths.
+No internal header bar; uses an inline section title.
 """
 
 from __future__ import annotations
@@ -23,49 +24,37 @@ class PathRow(QWidget):
 
     def __init__(self, label: str, icon: str, default: str = "", parent=None):
         super().__init__(parent)
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(5)
 
         self._lbl = QLabel(f"{icon}  {label}")
-        self._lbl.setFixedWidth(80)
-        self._lbl.setFont(QFont("Arial", 12))
+        lf = QFont()
+        lf.setPixelSize(12)
+        lf.setBold(True)
+        self._lbl.setFont(lf)
         layout.addWidget(self._lbl)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
 
         self._edit = QLineEdit(default)
         self._edit.textChanged.connect(self.changed)
-        layout.addWidget(self._edit, stretch=1)
+        row.addWidget(self._edit, stretch=1)
 
         self._browse = QPushButton("…")
-        self._browse.setFixedSize(32, 32)
+        self._browse.setFixedSize(34, 34)
         self._browse.clicked.connect(self._browse_dir)
-        layout.addWidget(self._browse)
+        row.addWidget(self._browse)
 
+        layout.addLayout(row)
         self.apply_theme()
 
     def apply_theme(self):
-        self._lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        self._lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY}; background: transparent;")
         self._edit.setStyleSheet(T.INPUT_STYLE)
-        if T.dark:
-            self._browse.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                        stop:0 #3a3a3c, stop:1 #2c2c2e);
-                    border: 1px solid #48484a; border-radius: 6px;
-                    color: #f0f0f0; font-size: 16px;
-                }
-                QPushButton:hover { background: #48484a; }
-            """)
-        else:
-            self._browse.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                        stop:0 #f0f0f0, stop:1 #d8d8d8);
-                    border: 1px solid #b0b0b0; border-radius: 6px;
-                    color: #555; font-size: 16px;
-                }
-                QPushButton:hover { background: #e0e0e0; color: #111; }
-            """)
+        self._browse.setStyleSheet(T.small_btn_style())
 
     def _browse_dir(self):
         path = QFileDialog.getExistingDirectory(self, "Select Folder", self._edit.text())
@@ -84,33 +73,42 @@ class DestPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(220)
-        self.setMaximumWidth(360)
+        self.setMinimumWidth(200)
+        self.setMaximumWidth(320)
         self._build()
 
     def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self._header_widget = QWidget()
-        self._header_widget.setObjectName("panelHeader")
-        self._header_widget.setFixedHeight(52)
-        h_layout = QHBoxLayout(self._header_widget)
-        h_layout.setContentsMargins(16, 0, 16, 0)
+        # Slim top bar matching SourcePanel
+        top_bar = QWidget()
+        top_bar.setFixedHeight(44)
+        tb_layout = QHBoxLayout(top_bar)
+        tb_layout.setContentsMargins(14, 0, 14, 0)
+
         self._title_lbl = QLabel("DESTINATION")
-        self._title_lbl.setFont(QFont("Arial", 11, QFont.Bold))
-        h_layout.addWidget(self._title_lbl)
-        layout.addWidget(self._header_widget)
+        tf = QFont()
+        tf.setPixelSize(10)
+        tf.setBold(True)
+        self._title_lbl.setFont(tf)
+        tb_layout.addWidget(self._title_lbl)
+        tb_layout.addStretch()
 
+        self._top_bar = top_bar
+        root.addWidget(top_bar)
+
+        div = QWidget()
+        div.setFixedHeight(1)
+        self._top_div = div
+        root.addWidget(div)
+
+        # Body
         self._body = QWidget()
         body_layout = QVBoxLayout(self._body)
-        body_layout.setContentsMargins(16, 16, 16, 16)
-        body_layout.setSpacing(16)
-
-        self._drive_label = QLabel("External Drive")
-        self._drive_label.setFont(QFont("Arial", 11, QFont.Bold))
-        body_layout.addWidget(self._drive_label)
+        body_layout.setContentsMargins(14, 18, 14, 16)
+        body_layout.setSpacing(18)
 
         self._photo_row = PathRow("Photos", "📷")
         self._photo_row.changed.connect(self._emit_config)
@@ -120,36 +118,52 @@ class DestPanel(QWidget):
         self._video_row.changed.connect(self._emit_config)
         body_layout.addWidget(self._video_row)
 
-        self._div = QFrame()
-        self._div.setFrameShape(QFrame.HLine)
-        body_layout.addWidget(self._div)
+        # Folder structure preview
+        self._preview_box = QFrame()
+        self._preview_box.setObjectName("previewBox")
+        self._preview_box.setFrameShape(QFrame.NoFrame)
+        pb_inner = QVBoxLayout(self._preview_box)
+        pb_inner.setContentsMargins(14, 12, 14, 12)
+        pb_inner.setSpacing(6)
 
-        self._preview_label = QLabel("Folder structure:")
-        self._preview_label.setFont(QFont("Arial", 11, QFont.Bold))
-        body_layout.addWidget(self._preview_label)
+        self._preview_title = QLabel("FOLDER STRUCTURE")
+        ptf = QFont()
+        ptf.setPixelSize(10)
+        ptf.setBold(True)
+        self._preview_title.setFont(ptf)
+        pb_inner.addWidget(self._preview_title)
 
         self._preview = QLabel(self._structure_text())
-        self._preview.setFont(QFont("Menlo, Courier", 11))
+        self._preview.setFont(QFont("Menlo, Courier New, monospace", 11))
         self._preview.setWordWrap(True)
-        body_layout.addWidget(self._preview)
+        pb_inner.addWidget(self._preview)
 
+        body_layout.addWidget(self._preview_box)
         body_layout.addStretch()
-        layout.addWidget(self._body, stretch=1)
+        root.addWidget(self._body, stretch=1)
 
         self.apply_theme()
 
     def apply_theme(self):
-        self.setStyleSheet(f"DestPanel {{ background: {T.BG_PANEL}; }}")
-        self._header_widget.setStyleSheet(T.HEADER_STYLE)
-        self._title_lbl.setStyleSheet(T.PANEL_TITLE_STYLE)
+        self.setStyleSheet(f"DestPanel {{ background: {T.BG_SIDEBAR}; }}")
+        self._top_bar.setStyleSheet(
+            f"QWidget {{ background: {T.BG_SIDEBAR}; }}"
+            f" QLabel {{ color: {T.TEXT_MUTED}; letter-spacing: 1.5px; background: transparent; }}"
+        )
+        self._top_div.setStyleSheet(f"background: {T.DIVIDER};")
         self._body.setStyleSheet(
-            f"background: {T.BG_PANEL};"
+            f"background: {T.BG_SIDEBAR};"
             f" QLabel {{ background: transparent; border: none; }}"
         )
-        self._drive_label.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
-        self._div.setStyleSheet(f"color: {T.DIVIDER};")
-        self._preview_label.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
-        self._preview.setStyleSheet(f"color: {T.TEXT_MUTED}; line-height: 1.6;")
+        self._preview_box.setStyleSheet(
+            f"QFrame#previewBox {{ background: {T.BG_BASE}; border: 1px solid {T.BORDER}; border-radius: 10px; }}"
+        )
+        self._preview_title.setStyleSheet(
+            f"color: {T.TEXT_MUTED}; letter-spacing: 1.5px; background: transparent;"
+        )
+        self._preview.setStyleSheet(
+            f"color: {T.TEXT_SECONDARY}; line-height: 1.7; background: transparent;"
+        )
         self._photo_row.apply_theme()
         self._video_row.apply_theme()
 
@@ -170,7 +184,7 @@ class DestPanel(QWidget):
         self._emit_config()
 
     def set_drive_root(self, root: Path):
-        logger.info("Destination auto-filled from drive root: %s", root)
+        logger.info("Destination auto-filled: %s", root)
         self._photo_row.set_path(str(root / "Photography"))
         self._video_row.set_path(str(root / "Footage"))
         self._emit_config()

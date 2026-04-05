@@ -1,12 +1,13 @@
 """
 History Panel — shows past import records from the database.
+No internal header bar.
 """
 
 from __future__ import annotations
-
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView, QPushButton
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor
@@ -24,26 +25,38 @@ class HistoryPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._header_widget = QWidget()
-        self._header_widget.setObjectName("panelHeader")
-        self._header_widget.setFixedHeight(52)
-        h_layout = QHBoxLayout(self._header_widget)
-        h_layout.setContentsMargins(16, 0, 16, 0)
+        # Slim action bar (matches FileTable summary bar height)
+        self._bar = QWidget()
+        self._bar.setFixedHeight(36)
+        bar_layout = QHBoxLayout(self._bar)
+        bar_layout.setContentsMargins(16, 0, 16, 0)
+        bar_layout.setSpacing(8)
 
-        self._title_lbl = QLabel("IMPORT HISTORY")
-        self._title_lbl.setFont(QFont("Arial", 11, QFont.Bold))
-        h_layout.addWidget(self._title_lbl)
-        h_layout.addStretch()
+        self._count_lbl = QLabel("")
+        cf = QFont()
+        cf.setPixelSize(12)
+        self._count_lbl.setFont(cf)
+        bar_layout.addWidget(self._count_lbl)
+        bar_layout.addStretch()
 
         self._refresh_btn = QPushButton("Refresh")
-        self._refresh_btn.setFixedHeight(28)
+        self._refresh_btn.setFixedHeight(26)
         self._refresh_btn.clicked.connect(self.load)
-        h_layout.addWidget(self._refresh_btn)
-        layout.addWidget(self._header_widget)
+        bar_layout.addWidget(self._refresh_btn)
 
+        layout.addWidget(self._bar)
+
+        div = QWidget()
+        div.setFixedHeight(1)
+        self._bar_div = div
+        layout.addWidget(div)
+
+        # Table
         self._table = QTableWidget()
         self._table.setColumnCount(6)
-        self._table.setHorizontalHeaderLabels(["File", "Type", "Camera", "Captured", "Imported", "Destination"])
+        self._table.setHorizontalHeaderLabels(
+            ["File", "Type", "Camera", "Captured", "Imported", "Destination"]
+        )
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -58,43 +71,26 @@ class HistoryPanel(QWidget):
         self._table.setSortingEnabled(True)
         layout.addWidget(self._table, stretch=1)
 
+        # Empty state
         self._empty_lbl = QLabel("No import history yet.\nFiles will appear here after your first import.")
         self._empty_lbl.setAlignment(Qt.AlignCenter)
-        self._empty_lbl.setFont(QFont("Arial", 13))
+        self._empty_lbl.setFont(QFont("Arial", 14))
         self._empty_lbl.hide()
         layout.addWidget(self._empty_lbl)
 
         self.apply_theme()
 
     def apply_theme(self):
-        self._header_widget.setStyleSheet(T.HEADER_STYLE)
-        self._title_lbl.setStyleSheet(T.PANEL_TITLE_STYLE)
+        self._bar.setStyleSheet(f"background: {T.BG_TABLE_HDR};")
+        self._bar_div.setStyleSheet(f"background: {T.DIVIDER};")
+        self._count_lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY}; background: transparent;")
+        self._refresh_btn.setStyleSheet(T.small_btn_style())
         self._table.setStyleSheet(T.TABLE_STYLE)
         self.setStyleSheet(
-            f"HistoryPanel {{ background: {T.BG_PANEL}; }}"
+            f"HistoryPanel {{ background: {T.BG_TABLE}; }}"
             f" QLabel {{ background: transparent; border: none; }}"
         )
         self._empty_lbl.setStyleSheet(f"color: {T.TEXT_MUTED};")
-        if T.dark:
-            self._refresh_btn.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                        stop:0 #3a3a3c, stop:1 #2c2c2e);
-                    border: 1px solid #48484a; border-radius: 5px;
-                    color: #f0f0f0; font-size: 11px; padding: 0 10px;
-                }
-                QPushButton:hover { background: #48484a; }
-            """)
-        else:
-            self._refresh_btn.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                        stop:0 #f0f0f0, stop:1 #d8d8d8);
-                    border: 1px solid #b0b0b0; border-radius: 5px;
-                    color: #444; font-size: 11px; padding: 0 10px;
-                }
-                QPushButton:hover { background: #e0e0e0; color: #111; }
-            """)
 
     def load(self):
         try:
@@ -119,9 +115,9 @@ class HistoryPanel(QWidget):
 
             for col, text in enumerate([filename, media_type, camera, captured, imported, dest]):
                 item = QTableWidgetItem(text)
-                item.setForeground(QColor(T.TEXT_PRIMARY))
+                item.setForeground(QColor(T.TEXT_PRIMARY if col == 0 else T.TEXT_SECONDARY))
                 self._table.setItem(row, col, item)
-
-            self._table.setRowHeight(row, 28)
+            self._table.setRowHeight(row, 32)
 
         self._table.setSortingEnabled(True)
+        self._count_lbl.setText(f"{len(records)} records" if records else "")

@@ -2,14 +2,14 @@
 Main Window — top-level application window.
 
 Layout:
-  ┌──────────────────────────────────────────────────────┐
-  │  Header bar (app name + status + settings button)    │
-  ├──────────────┬───────────────────────┬───────────────┤
-  │ Source Panel │  Files | History tabs │  Dest Panel   │
-  │ (drives)     │                       │  (paths)      │
-  ├──────────────┴───────────────────────┴───────────────┤
-  │  [SCAN]   Progress bars   [IMPORT NEW FILES]         │
-  └──────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Toolbar: title · status · [Files][History] · [◐] [Settings]│
+  ├──────────────┬──────────────────────────────┬───────────────┤
+  │ Source Panel │  FileTable / HistoryPanel     │  Dest Panel   │
+  │  (sidebar)   │     (stacked, stretches)      │  (right col)  │
+  ├──────────────┴──────────────────────────────┴───────────────┤
+  │  [Scan Card]   ████ progress ████   [Import New Files →]     │
+  └──────────────────────────────────────────────────────────────┘
 """
 
 from __future__ import annotations
@@ -19,14 +19,17 @@ import threading
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QProgressBar, QSplitter,
-    QStatusBar, QMessageBox, QTabWidget
+    QStatusBar, QMessageBox, QStackedWidget, QButtonGroup
 )
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QFont
 from gui.widgets.source_panel import ElidedLabel
 
 from backend.utils.detector import DriveInfo
-from backend.utils.config import get_dest_paths, save_dest_paths, get_rules, get_dark_mode, save_dark_mode
+from backend.utils.config import (
+    get_dest_paths, save_dest_paths, get_rules,
+    get_dark_mode, save_dark_mode,
+)
 from backend.core.scanner import scan_card
 from backend.core.inspector import inspect_all
 from backend.core.dedup import DedupChecker
@@ -44,17 +47,17 @@ logger = logging.getLogger(__name__)
 
 
 class _Signals(QObject):
-    scan_done    = Signal(object, object)           # (ScanResult, new_set)
-    progress     = Signal(int, int, str, float, float)  # (done, total, filename, bytes_done, bytes_total)
-    import_done  = Signal(object)                   # ImportResult
-    status       = Signal(str)
+    scan_done   = Signal(object, object)
+    progress    = Signal(int, int, str, float, float)
+    import_done = Signal(object)
+    status      = Signal(str)
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Media Porter")
-        self.setMinimumSize(800, 580)
+        self.setMinimumSize(960, 660)
 
         self._sig = _Signals()
         self._sig.scan_done.connect(self._on_scan_done)
@@ -85,8 +88,9 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_header())
+        root.addWidget(self._build_toolbar())
 
+        # ── three-column body ──────────────────────────────────────────
         self._splitter = QSplitter(Qt.Horizontal)
         self._splitter.setHandleWidth(1)
 
@@ -94,110 +98,152 @@ class MainWindow(QMainWindow):
         self._source_panel.drive_selected.connect(self._on_drive_selected)
         self._splitter.addWidget(self._source_panel)
 
-        self._tabs = QTabWidget()
+        # Center: stacked file table / history
+        self._stack = QStackedWidget()
         self._file_table = FileTable()
         self._history_panel = HistoryPanel()
-        self._tabs.addTab(self._file_table,    "Files")
-        self._tabs.addTab(self._history_panel, "History")
-        self._tabs.currentChanged.connect(self._on_tab_changed)
-        self._splitter.addWidget(self._tabs)
+        self._stack.addWidget(self._file_table)
+        self._stack.addWidget(self._history_panel)
+        self._splitter.addWidget(self._stack)
 
         self._dest_panel = DestPanel()
         self._dest_panel.config_changed.connect(self._on_config_changed)
         self._splitter.addWidget(self._dest_panel)
 
-        self._splitter.setSizes([280, 580, 280])
+        self._splitter.setSizes([240, 620, 260])
         root.addWidget(self._splitter, stretch=1)
 
-        root.addWidget(self._build_bottom_bar())
+        root.addWidget(self._build_action_bar())
 
         self._status_bar = QStatusBar()
+        self._status_bar.setSizeGripEnabled(False)
         self.setStatusBar(self._status_bar)
         self._set_status("Ready — plug in your SD card")
 
-    def _build_header(self) -> QWidget:
-        self._header = QWidget()
-        self._header.setObjectName("panelHeader")
-        self._header.setFixedHeight(52)
-        layout = QHBoxLayout(self._header)
-        layout.setContentsMargins(20, 0, 20, 0)
+    def _build_toolbar(self) -> QWidget:
+        self._toolbar = QWidget()
+        self._toolbar.setObjectName("mainToolbar")
+        self._toolbar.setFixedHeight(56)
+        layout = QHBoxLayout(self._toolbar)
+        layout.setContentsMargins(20, 0, 16, 0)
+        layout.setSpacing(10)
 
+        # App title
         self._app_title = QLabel("Media Porter")
-        self._app_title.setFont(QFont("Arial", 16, QFont.Bold))
+        f = QFont()
+        f.setPixelSize(17)
+        f.setBold(True)
+        self._app_title.setFont(f)
         layout.addWidget(self._app_title)
 
-        layout.addStretch()
+        layout.addSpacing(8)
 
+        # Status
         self._header_status = ElidedLabel("")
         self._header_status.setFont(QFont("Arial", 12))
-        self._header_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self._header_status)
+        self._header_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        layout.addWidget(self._header_status, stretch=1)
 
+        # Segmented tab control
+        self._seg_container = QWidget()
+        self._seg_container.setObjectName("segContainer")
+        self._seg_container.setFixedHeight(36)
+        seg_layout = QHBoxLayout(self._seg_container)
+        seg_layout.setContentsMargins(3, 3, 3, 3)
+        seg_layout.setSpacing(1)
+
+        self._files_btn = QPushButton("Files")
+        self._files_btn.setCheckable(True)
+        self._files_btn.setChecked(True)
+        self._files_btn.setFixedHeight(30)
+        self._files_btn.clicked.connect(lambda: self._switch_view(0))
+
+        self._history_btn = QPushButton("History")
+        self._history_btn.setCheckable(True)
+        self._history_btn.setFixedHeight(30)
+        self._history_btn.clicked.connect(lambda: self._switch_view(1))
+
+        self._tab_group = QButtonGroup(self)
+        self._tab_group.setExclusive(True)
+        self._tab_group.addButton(self._files_btn, 0)
+        self._tab_group.addButton(self._history_btn, 1)
+
+        seg_layout.addWidget(self._files_btn)
+        seg_layout.addWidget(self._history_btn)
+        layout.addWidget(self._seg_container)
+
+        layout.addSpacing(6)
+
+        # Theme toggle + Settings
         self._theme_btn = QPushButton()
-        self._theme_btn.setFixedSize(72, 32)
+        self._theme_btn.setFixedSize(68, 32)
         self._theme_btn.setToolTip("Toggle dark / light mode")
         self._theme_btn.clicked.connect(self._toggle_theme)
-        layout.addSpacing(8)
         layout.addWidget(self._theme_btn)
 
-        self._settings_btn = QPushButton("⚙  Settings")
+        self._settings_btn = QPushButton("Settings")
         self._settings_btn.setFixedHeight(32)
         self._settings_btn.clicked.connect(self._open_settings)
         layout.addWidget(self._settings_btn)
 
-        return self._header
+        return self._toolbar
 
-    def _build_bottom_bar(self) -> QWidget:
-        self._bottom_bar = QWidget()
-        self._bottom_bar.setFixedHeight(76)
-        layout = QHBoxLayout(self._bottom_bar)
-        layout.setContentsMargins(16, 0, 16, 0)
-        layout.setSpacing(12)
+    def _build_action_bar(self) -> QWidget:
+        self._action_bar = QWidget()
+        self._action_bar.setObjectName("actionBar")
+        self._action_bar.setFixedHeight(68)
+        layout = QHBoxLayout(self._action_bar)
+        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setSpacing(14)
 
-        self._scan_btn = QPushButton("⟳  Scan Card")
-        self._scan_btn.setFixedHeight(40)
-        self._scan_btn.setFixedWidth(130)
+        self._scan_btn = QPushButton("Scan Card")
+        self._scan_btn.setFixedHeight(38)
+        self._scan_btn.setFixedWidth(120)
         self._scan_btn.setEnabled(False)
         self._scan_btn.clicked.connect(self._do_scan)
         layout.addWidget(self._scan_btn)
 
         progress_col = QWidget()
-        progress_layout = QVBoxLayout(progress_col)
-        progress_layout.setContentsMargins(0, 0, 0, 0)
-        progress_layout.setSpacing(5)
+        pcol_layout = QVBoxLayout(progress_col)
+        pcol_layout.setContentsMargins(0, 0, 0, 0)
+        pcol_layout.setSpacing(6)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
-        self._progress.setFixedHeight(8)
+        self._progress.setFixedHeight(6)
         self._progress.setTextVisible(False)
-        progress_layout.addWidget(self._progress)
+        pcol_layout.addWidget(self._progress)
 
         self._file_progress = QProgressBar()
         self._file_progress.setRange(0, 1000)
         self._file_progress.setValue(0)
-        self._file_progress.setFixedHeight(4)
+        self._file_progress.setFixedHeight(3)
         self._file_progress.setTextVisible(False)
         self._file_progress.setVisible(False)
-        progress_layout.addWidget(self._file_progress)
+        pcol_layout.addWidget(self._file_progress)
 
         layout.addWidget(progress_col, stretch=1)
 
         self._import_btn = QPushButton("Import New Files →")
-        self._import_btn.setFixedHeight(40)
-        self._import_btn.setFixedWidth(180)
+        self._import_btn.setFixedHeight(38)
+        self._import_btn.setFixedWidth(196)
         self._import_btn.setEnabled(False)
         self._import_btn.clicked.connect(self._do_import)
         layout.addWidget(self._import_btn)
 
-        self._cancel_btn = QPushButton("✕  Cancel")
-        self._cancel_btn.setFixedHeight(40)
-        self._cancel_btn.setFixedWidth(110)
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setFixedHeight(38)
+        self._cancel_btn.setFixedWidth(100)
         self._cancel_btn.setVisible(False)
         self._cancel_btn.clicked.connect(self._do_cancel)
         layout.addWidget(self._cancel_btn)
 
-        return self._bottom_bar
+        return self._action_bar
+
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
 
     def _toggle_theme(self):
         T.set_dark(not T.dark)
@@ -210,10 +256,11 @@ class MainWindow(QMainWindow):
             f" QLabel {{ background: transparent; }}"
         )
 
-        # Header
-        self._header.setStyleSheet(T.HEADER_STYLE)
+        # Toolbar
+        self._toolbar.setStyleSheet(T.TOOLBAR_STYLE)
         self._app_title.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
-        self._header_status.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        self._header_status.setStyleSheet(f"color: {T.TEXT_SECONDARY}; font-size: 13px;")
+        self._seg_container.setStyleSheet(T.SEGMENT_STYLE)
         self._theme_btn.setText("Light" if T.dark else "Dark")
         self._theme_btn.setStyleSheet(T.btn_secondary(h=32))
         self._settings_btn.setStyleSheet(T.btn_secondary(h=32))
@@ -224,24 +271,18 @@ class MainWindow(QMainWindow):
             f" QSplitter::handle {{ background: {T.SPLITTER}; }}"
         )
 
-        # Tabs
-        self._tabs.setStyleSheet(T.TAB_STYLE)
-
-        # Bottom bar
-        self._bottom_bar.setStyleSheet(
-            f"background: {T.BG_BOTTOM}; border-top: 1px solid {T.DIVIDER};"
-            f" QLabel {{ background: transparent; border: none; }}"
-        )
-        self._scan_btn.setStyleSheet(T.btn_secondary(h=40))
-        self._import_btn.setStyleSheet(T.btn_primary(h=40))
-        self._cancel_btn.setStyleSheet(T.btn_danger(h=40))
+        # Action bar
+        self._action_bar.setStyleSheet(T.ACTIONBAR_STYLE)
+        self._scan_btn.setStyleSheet(T.btn_secondary(h=38))
+        self._import_btn.setStyleSheet(T.btn_primary(h=38))
+        self._cancel_btn.setStyleSheet(T.btn_danger(h=38))
         self._progress.setStyleSheet(T.PROGRESS_STYLE)
         self._file_progress.setStyleSheet(T.FILE_PROGRESS_STYLE)
 
         # Status bar
         self._status_bar.setStyleSheet(
             f"QStatusBar {{ background: {T.BG_BOTTOM}; color: {T.TEXT_SECONDARY};"
-            f" font-size: 11px; border-top: 1px solid {T.DIVIDER}; }}"
+            f" font-size: 12px; border-top: 1px solid {T.DIVIDER}; padding: 0 8px; }}"
             f" QStatusBar::item {{ border: none; }}"
         )
 
@@ -252,17 +293,21 @@ class MainWindow(QMainWindow):
         self._history_panel.apply_theme()
 
     # ------------------------------------------------------------------
+    # View switching
+    # ------------------------------------------------------------------
+
+    def _switch_view(self, index: int):
+        self._stack.setCurrentIndex(index)
+        if index == 1:
+            self._history_panel.load()
+
+    # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
-    def _on_tab_changed(self, index: int):
-        if index == 1:  # History tab
-            self._history_panel.load()
-
     def _open_settings(self):
         from .widgets.settings_panel import SettingsDialog
-        rules = get_rules()
-        dlg = SettingsDialog(rules, parent=self)
+        dlg = SettingsDialog(get_rules(), parent=self)
         dlg.rules_saved.connect(self._on_rules_saved)
         dlg.exec()
 
@@ -284,7 +329,6 @@ class MainWindow(QMainWindow):
             self._set_status(f"Destination set to {drive.label} ({drive.mount_point})")
 
     def _load_saved_config(self):
-        """Pre-fill destination paths and rules from last session."""
         paths = get_dest_paths()
         if paths:
             photo, video = paths
@@ -292,11 +336,9 @@ class MainWindow(QMainWindow):
             logger.info("Restored dest config from saved config")
 
     def _on_config_changed(self, config: DestinationConfig):
-        # Inject saved rule templates
         config.templates = get_rules()
         self._dest_config = config
         save_dest_paths(config.photo_base, config.video_base)
-        logger.debug("Dest config updated: photos=%s  videos=%s", config.photo_base, config.video_base)
 
         if not self._importing and self._scan_result and self._new_set:
             new_count = len(self._new_set)
@@ -308,20 +350,19 @@ class MainWindow(QMainWindow):
     def _do_scan(self):
         if not hasattr(self, "_selected_drive"):
             return
-
         drive = self._selected_drive
 
         if self._dest_config and self._is_dest_drive(drive):
             self._set_status("Cannot scan destination drive — select your SD card instead.")
-            logger.warning("Scan blocked: %s is the destination drive", drive.mount_point)
             return
 
         self._scan_btn.setEnabled(False)
         self._import_btn.setEnabled(False)
         self._file_table.clear()
         self._progress.setValue(0)
-        self._set_status("Scanning SD card...")
-        self._tabs.setCurrentIndex(0)
+        self._set_status("Scanning SD card…")
+        self._switch_view(0)
+        self._files_btn.setChecked(True)
         logger.info("Scan started: %s", drive.mount_point)
         config = self._dest_config
 
@@ -366,7 +407,6 @@ class MainWindow(QMainWindow):
             return
 
         self._file_table.load(result.files, new_set)
-
         new_count = len(new_set)
         logger.info("Scan done: %d total, %d new", result.total, new_count)
         self._import_btn.setEnabled(new_count > 0 and self._dest_config is not None)
@@ -389,14 +429,10 @@ class MainWindow(QMainWindow):
             msg = QMessageBox(self)
             msg.setWindowTitle("Not Enough Space")
             msg.setIcon(QMessageBox.Critical)
-            msg.setText(
-                f"Not enough space to import {len(new_files)} files "
-                f"({total_needed:.2f} GB total)."
-            )
+            msg.setText(f"Not enough space to import {len(new_files)} files ({total_needed:.2f} GB total).")
             msg.setInformativeText("\n".join(errors))
             msg.setStandardButtons(QMessageBox.Ok)
             msg.exec()
-            logger.warning("Import blocked — insufficient space: %s", errors)
             return
 
         self._importing = True
@@ -407,7 +443,7 @@ class MainWindow(QMainWindow):
         self._progress.setValue(0)
         self._file_progress.setValue(0)
         self._file_progress.setVisible(True)
-        self._set_status("Importing...")
+        self._set_status("Importing…")
         logger.info("Import started: %d new files", len(new_files))
 
         files = self._scan_result.files
@@ -415,7 +451,6 @@ class MainWindow(QMainWindow):
         def _worker():
             def on_progress(done, total, name, bytes_done, bytes_total):
                 self._sig.progress.emit(done, total, name, bytes_done, bytes_total)
-
             result = run_import(files, config, progress_cb=on_progress,
                                 cancel_event=self._cancel_event)
             self._sig.import_done.emit(result)
@@ -430,15 +465,11 @@ class MainWindow(QMainWindow):
 
         mb_done  = bytes_done  / 1_048_576
         mb_total = bytes_total / 1_048_576
-        self._set_status(
-            f"Copying  {done}/{total}  —  {filename}  "
-            f"({mb_done:.0f} / {mb_total:.0f} MB)"
-        )
+        self._set_status(f"Copying  {done}/{total}  —  {filename}  ({mb_done:.0f} / {mb_total:.0f} MB)")
 
         if filename != self._current_file:
             self._current_file = filename
             self._file_table.mark_in_progress(filename)
-
         if bytes_done == bytes_total:
             self._current_file = None
             self._file_table.mark_copied(filename)
@@ -446,9 +477,8 @@ class MainWindow(QMainWindow):
     def _do_cancel(self):
         self._cancel_event.set()
         self._cancel_btn.setEnabled(False)
-        self._cancel_btn.setText("Cancelling...")
-        self._set_status("Cancelling — finishing current file...")
-        logger.info("Import cancel requested by user")
+        self._cancel_btn.setText("Cancelling…")
+        self._set_status("Cancelling — finishing current file…")
 
     def _on_import_done(self, result):
         cancelled = self._cancel_event.is_set()
@@ -457,7 +487,7 @@ class MainWindow(QMainWindow):
         self._scan_btn.setEnabled(True)
         self._cancel_btn.setVisible(False)
         self._cancel_btn.setEnabled(True)
-        self._cancel_btn.setText("✕  Cancel")
+        self._cancel_btn.setText("Cancel")
 
         self._importing = False
         self._file_progress.setVisible(False)

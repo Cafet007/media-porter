@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QWidget, QGridLayout
+    QPushButton, QWidget, QGridLayout, QFrame, QScrollArea
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 
 from gui.theme import T
@@ -25,28 +25,34 @@ class TemplateRow(QWidget):
         self._key = key
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
 
         self._lbl = QLabel(label)
-        self._lbl.setFont(QFont("Arial", 11, QFont.Bold))
+        lbl_font = QFont()
+        lbl_font.setPixelSize(13)
+        lbl_font.setBold(True)
+        self._lbl.setFont(lbl_font)
         layout.addWidget(self._lbl)
 
         self._edit = QLineEdit(template)
+        self._edit.setMinimumHeight(36)
         self._edit.textChanged.connect(self._update_preview)
         self._edit.textChanged.connect(self.changed)
         layout.addWidget(self._edit)
 
         self._preview = QLabel()
-        self._preview.setFont(QFont("Menlo, Courier", 10))
+        preview_font = QFont("Menlo, Courier New, monospace", 11)
+        self._preview.setFont(preview_font)
         layout.addWidget(self._preview)
 
         self._apply_styles()
         self._update_preview()
 
     def _apply_styles(self):
-        self._lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        self._lbl.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
         self._edit.setStyleSheet(
-            T.INPUT_STYLE + "QLineEdit { font-family: Menlo, Courier, monospace; }"
+            T.INPUT_STYLE +
+            " QLineEdit { font-family: 'Menlo', 'Courier New', monospace; font-size: 13px; min-height: 36px; }"
         )
 
     def _update_preview(self):
@@ -74,40 +80,72 @@ class SettingsDialog(QDialog):
     def __init__(self, rules: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings — Folder Naming Rules")
-        self.setMinimumWidth(640)
-        self.setStyleSheet(f"QDialog {{ background: {T.BG_PANEL}; }}")
+        self.setMinimumWidth(720)
+        self.resize(760, 760)
+        self.setStyleSheet(
+            f"QDialog {{ background: {T.BG_BASE}; }}"
+            f" QLabel {{ background: transparent; }}"
+        )
         self._build(rules)
 
     def _build(self, rules: dict):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(20)
+        layout.setContentsMargins(28, 28, 28, 24)
+        layout.setSpacing(0)
 
+        # Title
         title = QLabel("Folder Naming Rules")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
+        title_font = QFont()
+        title_font.setPixelSize(20)
+        title_font.setBold(True)
+        title.setFont(title_font)
         title.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
         layout.addWidget(title)
+        layout.addSpacing(6)
 
-        subtitle = QLabel("Templates are relative to your Photos and Videos destination folders.")
-        subtitle.setStyleSheet(f"color: {T.TEXT_MUTED}; font-size: 12px;")
+        subtitle = QLabel("Templates control how imported files are organized within your destination folders.")
+        subtitle.setStyleSheet(f"color: {T.TEXT_SECONDARY}; font-size: 13px;")
+        subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
+        layout.addSpacing(24)
+
+        # Template rows
+        templates_box = QWidget()
+        templates_box.setObjectName("templatesBox")
+        templates_box.setStyleSheet(
+            f"QWidget#templatesBox {{ background: {T.BG_PANEL}; border: 1px solid {T.BORDER}; border-radius: 12px; }}"
+        )
+        templates_layout = QVBoxLayout(templates_box)
+        templates_layout.setContentsMargins(20, 20, 20, 20)
+        templates_layout.setSpacing(20)
 
         self._photo_row = TemplateRow("Photos  (.jpg .heic .png)", "photo", rules.get("photo", ""))
         self._raw_row   = TemplateRow("RAW  (.arw .cr3 .nef .dng …)", "raw",   rules.get("raw",   ""))
         self._video_row = TemplateRow("Videos  (.mp4 .mov .mts …)", "video", rules.get("video", ""))
 
-        layout.addWidget(self._photo_row)
-        layout.addWidget(self._raw_row)
-        layout.addWidget(self._video_row)
-        layout.addWidget(self._build_variable_ref())
+        templates_layout.addWidget(self._photo_row)
+        templates_layout.addWidget(self._build_divider())
+        templates_layout.addWidget(self._raw_row)
+        templates_layout.addWidget(self._build_divider())
+        templates_layout.addWidget(self._video_row)
 
+        layout.addWidget(templates_box)
+        layout.addSpacing(16)
+
+        # Variable reference
+        layout.addWidget(self._build_variable_ref())
+        layout.addSpacing(20)
+
+        # Buttons
         btn_row = QHBoxLayout()
-        btn_row.addStretch()
+        btn_row.setSpacing(10)
 
         reset_btn = QPushButton("Reset to Defaults")
         reset_btn.setStyleSheet(T.btn_secondary(h=36))
         reset_btn.clicked.connect(self._reset)
         btn_row.addWidget(reset_btn)
+
+        btn_row.addStretch()
 
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setStyleSheet(T.btn_secondary(h=36))
@@ -121,34 +159,49 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(btn_row)
 
+    def _build_divider(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet(f"color: {T.DIVIDER}; background: transparent;")
+        return line
+
     def _build_variable_ref(self) -> QWidget:
         from backend.core.rules import TEMPLATE_VARIABLES
 
         box = QWidget()
-        border_color = T.BORDER
+        box.setObjectName("varRefBox")
         box.setStyleSheet(
-            f"background: {T.BG_BASE}; border: 1px solid {border_color}; border-radius: 8px;"
+            f"QWidget#varRefBox {{ background: {T.BG_PANEL}; border: 1px solid {T.BORDER}; border-radius: 12px; }}"
         )
         inner = QVBoxLayout(box)
-        inner.setContentsMargins(16, 12, 16, 12)
-        inner.setSpacing(8)
+        inner.setContentsMargins(20, 16, 20, 16)
+        inner.setSpacing(10)
 
-        hdr = QLabel("Available variables")
-        hdr.setFont(QFont("Arial", 11, QFont.Bold))
-        hdr.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        hdr = QLabel("Available Variables")
+        hdr_font = QFont()
+        hdr_font.setPixelSize(12)
+        hdr_font.setBold(True)
+        hdr.setFont(hdr_font)
+        hdr.setStyleSheet(f"color: {T.TEXT_MUTED}; letter-spacing: 1px; text-transform: uppercase;")
         inner.addWidget(hdr)
 
         grid = QGridLayout()
         grid.setSpacing(4)
+        grid.setColumnMinimumWidth(0, 140)
+        grid.setColumnMinimumWidth(1, 100)
+
         for row, (var, example, desc) in enumerate(TEMPLATE_VARIABLES):
             v = QLabel(var)
-            v.setFont(QFont("Menlo, Courier", 11))
+            v.setFont(QFont("Menlo, Courier New, monospace", 11))
             v.setStyleSheet(f"color: {T.ACCENT};")
+
             e = QLabel(example)
-            e.setFont(QFont("Menlo, Courier", 11))
+            e.setFont(QFont("Menlo, Courier New, monospace", 11))
             e.setStyleSheet(f"color: {T.SUCCESS};")
+
             d = QLabel(desc)
-            d.setStyleSheet(f"color: {T.TEXT_MUTED}; font-size: 11px;")
+            d.setStyleSheet(f"color: {T.TEXT_SECONDARY}; font-size: 12px;")
+
             grid.addWidget(v, row, 0)
             grid.addWidget(e, row, 1)
             grid.addWidget(d, row, 2)
