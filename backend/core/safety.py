@@ -258,6 +258,36 @@ def verify_copy(dst: Path, expected_hash: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Temp file cleanup — call before starting a new import
+# ---------------------------------------------------------------------------
+
+_TMP_PREFIX = ".mporter_tmp_"
+
+
+def cleanup_temp_files(*directories: Path) -> int:
+    """
+    Remove any leftover .mporter_tmp_* files from a previous crashed import.
+    Safe to call before every import run.
+    Returns the number of temp files removed.
+    """
+    removed = 0
+    for directory in directories:
+        if not directory.exists():
+            continue
+        for tmp in directory.rglob(f"{_TMP_PREFIX}*"):
+            if tmp.is_file():
+                try:
+                    tmp.unlink()
+                    logger.warning("Removed stale temp file: %s", tmp)
+                    removed += 1
+                except Exception as exc:
+                    logger.error("Could not remove stale temp file %s: %s", tmp, exc)
+    if removed:
+        logger.info("Cleaned up %d stale temp file(s) from previous crashed import", removed)
+    return removed
+
+
+# ---------------------------------------------------------------------------
 # Read-only file opener — use this instead of open() for source files
 # ---------------------------------------------------------------------------
 

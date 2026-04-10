@@ -4,6 +4,7 @@ No internal header bar; includes an empty state view.
 """
 
 from __future__ import annotations
+from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView,
@@ -113,7 +114,25 @@ class FileTable(QWidget):
 
         layout.addWidget(self._summary_bar)
 
-        # Divider under summary bar
+        # Scan info bar — shows detected camera profile + per-root file counts
+        self._scan_info_bar = QWidget()
+        self._scan_info_bar.setFixedHeight(28)
+        si_layout = QHBoxLayout(self._scan_info_bar)
+        si_layout.setContentsMargins(16, 0, 16, 0)
+        si_layout.setSpacing(0)
+
+        self._scan_info_lbl = QLabel("")
+        sif = QFont()
+        sif.setPixelSize(11)
+        self._scan_info_lbl.setFont(sif)
+        self._scan_info_lbl.setWordWrap(False)
+        si_layout.addWidget(self._scan_info_lbl)
+        si_layout.addStretch()
+
+        self._scan_info_bar.setVisible(False)
+        layout.addWidget(self._scan_info_bar)
+
+        # Divider under summary/info bar
         div = QWidget()
         div.setFixedHeight(1)
         self._summary_div = div
@@ -182,12 +201,38 @@ class FileTable(QWidget):
         self._summary_bar.setStyleSheet(
             f"background: {T.BG_TABLE_HDR}; border-bottom: 0px;"
         )
+        self._scan_info_bar.setStyleSheet(
+            f"background: {T.BG_TABLE_HDR}; border-bottom: 0px;"
+        )
+        self._scan_info_lbl.setStyleSheet(f"color: {T.TEXT_MUTED}; background: transparent;")
         self._summary_div.setStyleSheet(f"background: {T.DIVIDER};")
         self._summary.setStyleSheet(f"color: {T.TEXT_SECONDARY}; background: transparent;")
         self._empty.setStyleSheet(f"background: {T.BG_TABLE};")
         self._empty_title.setStyleSheet(f"color: {T.TEXT_PRIMARY}; background: transparent;")
         self._empty_sub.setStyleSheet(f"color: {T.TEXT_MUTED}; font-size: 13px; background: transparent;")
         self._table.setStyleSheet(T.TABLE_STYLE)
+
+    def set_scan_info(self, profile_name: str, roots_scanned: dict[Path, int]) -> None:
+        """
+        Show the detected camera profile and per-folder file counts.
+        Gives users a clear audit trail — if files are missing they can see
+        exactly which folders were scanned and what came from each.
+        """
+        if not profile_name and not roots_scanned:
+            self._scan_info_bar.setVisible(False)
+            return
+
+        parts = [f"Camera: {profile_name}"] if profile_name else []
+        for root, count in roots_scanned.items():
+            # Show path relative to SD card root if possible, else last 2 parts
+            try:
+                display = "/".join(root.parts[-2:])
+            except Exception:
+                display = root.name
+            parts.append(f"{display} → {count} files")
+
+        self._scan_info_lbl.setText("   ·   ".join(parts))
+        self._scan_info_bar.setVisible(True)
 
     def load(self, files: list[MediaFile], new_set: set[tuple[str, int]] | None = None):
         self._table.setSortingEnabled(False)
@@ -279,3 +324,4 @@ class FileTable(QWidget):
         self._table.hide()
         self._empty.show()
         self._summary.setText("")
+        self._scan_info_bar.setVisible(False)

@@ -178,6 +178,37 @@ def test_run_import_stores_hash(src, config):
 # Conflict — destination exists but not in dedup index
 # ---------------------------------------------------------------------------
 
+def test_run_import_skips_via_db_path(tmp_path, src, config, monkeypatch):
+    """Files previously recorded in the DB by source path are skipped even if dest was moved."""
+    # Use an isolated DB so hash collisions from the real user DB can't interfere
+    import backend.db.models as db_models
+    import backend.db.repository as db_repo
+
+    test_db = tmp_path / "test_history.db"
+    monkeypatch.setattr(db_models, "_DB_PATH", test_db)
+    db_repo._engine = None  # force re-init with new path
+
+    f = _make_file(src, "IMG_DB.JPG", MediaType.PHOTO, size=64)
+
+    # First import — copies and records in DB
+    result1 = run_import([f], config)
+    assert result1.total_copied == 1
+
+    # Simulate dest being reorganized: delete the copied file from disk
+    copied_path = result1.copied[0][1]
+    copied_path.unlink()
+
+    # Second import — filesystem dedup won't find it (file is gone),
+    # but DB-path dedup should skip it
+    f2 = _make_file(src, "IMG_DB.JPG", MediaType.PHOTO, size=64)
+    result2 = run_import([f2], config)
+    assert result2.total_skipped == 1
+    assert result2.total_copied  == 0
+
+    # Cleanup: reset engine so subsequent tests use the real DB
+    db_repo._engine = None
+
+
 def test_run_import_conflict_when_dest_exists(src, config):
     f = _make_file(src, "IMG001.JPG", MediaType.PHOTO, size=64)
 

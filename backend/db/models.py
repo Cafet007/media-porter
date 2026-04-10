@@ -39,6 +39,7 @@ class ImportSession(Base):
     __tablename__ = "sessions"
 
     id:          Mapped[int]             = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name:        Mapped[Optional[str]]      = mapped_column(String)
     source_root: Mapped[str]             = mapped_column(String, nullable=False)
     dest_root:   Mapped[str]             = mapped_column(String, nullable=False)
     total_files: Mapped[Optional[int]]      = mapped_column(Integer)
@@ -52,7 +53,27 @@ class ImportSession(Base):
 
 def get_engine():
     """Return (and create if needed) the SQLite engine, creating tables on first run."""
+    from sqlalchemy import text, inspect as sa_inspect
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{_DB_PATH}", echo=False)
     Base.metadata.create_all(engine)
+    # Migrate: add columns that may not exist in older DB files
+    _migrate(engine)
     return engine
+
+
+def _migrate(engine) -> None:
+    """Apply additive schema migrations to existing DBs."""
+    from sqlalchemy import text, inspect as sa_inspect
+    inspector = sa_inspect(engine)
+    with engine.connect() as conn:
+        if "sessions" in inspector.get_table_names():
+            cols = {c["name"] for c in inspector.get_columns("sessions")}
+            # sessions.verified — added in Phase 1
+            if "verified" not in cols:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN verified INTEGER"))
+                conn.commit()
+            # sessions.name — added in Phase 2
+            if "name" not in cols:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN name TEXT"))
+                conn.commit()

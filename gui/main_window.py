@@ -19,7 +19,8 @@ import threading
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QProgressBar, QSplitter,
-    QStatusBar, QMessageBox, QStackedWidget, QButtonGroup
+    QStatusBar, QMessageBox, QStackedWidget, QButtonGroup,
+    QFileDialog,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QFont
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
         self._cancel_event = threading.Event()
         self._current_file: str | None = None
         self._importing = False
+        self._last_import_result = None
 
         T.set_dark(get_dark_mode())
         self._build_ui()
@@ -241,6 +243,13 @@ class MainWindow(QMainWindow):
         self._cancel_btn.clicked.connect(self._do_cancel)
         layout.addWidget(self._cancel_btn)
 
+        self._report_btn = QPushButton("Save Report")
+        self._report_btn.setFixedHeight(38)
+        self._report_btn.setFixedWidth(120)
+        self._report_btn.setVisible(False)
+        self._report_btn.clicked.connect(self._do_save_report)
+        layout.addWidget(self._report_btn)
+
         return self._action_bar
 
     # ------------------------------------------------------------------
@@ -278,6 +287,7 @@ class MainWindow(QMainWindow):
         self._scan_btn.setStyleSheet(T.btn_secondary(h=38))
         self._import_btn.setStyleSheet(T.btn_primary(h=38))
         self._cancel_btn.setStyleSheet(T.btn_danger(h=38))
+        self._report_btn.setStyleSheet(T.btn_secondary(h=38))
         self._progress.setStyleSheet(T.PROGRESS_STYLE)
         self._file_progress.setStyleSheet(T.FILE_PROGRESS_STYLE)
 
@@ -361,6 +371,8 @@ class MainWindow(QMainWindow):
 
         self._scan_btn.setEnabled(False)
         self._import_btn.setEnabled(False)
+        self._report_btn.setVisible(False)
+        self._last_import_result = None
         self._file_table.clear()
         self._progress.setValue(0)
         self._set_status("Scanning SD card…")
@@ -410,14 +422,26 @@ class MainWindow(QMainWindow):
             return
 
         self._file_table.load(result.files, new_set)
+        profile_name = result.profile.name if result.profile else "Unknown"
+        self._file_table.set_scan_info(profile_name, result.roots_scanned)
         new_count = len(new_set)
+        already_count = result.total - new_count
         logger.info("Scan done: %d total, %d new", result.total, new_count)
         self._import_btn.setEnabled(new_count > 0 and self._dest_config is not None)
         self._import_btn.setText(f"Import {new_count} New Files →" if new_count else "Nothing to Import")
-        self._set_status(
-            f"Scanned: {result.total} files  ·  "
-            f"New: {new_count}  ·  Already imported: {result.total - new_count}"
-        )
+
+        if already_count > 0 and new_count > 0:
+            self._set_status(
+                f"Resuming — {already_count} already imported  ·  {new_count} new to import"
+            )
+        elif already_count > 0 and new_count == 0:
+            self._set_status(
+                f"All {result.total} files already imported — nothing to do"
+            )
+        else:
+            self._set_status(
+                f"Scanned: {result.total} files  ·  {new_count} new"
+            )
 
     def _do_import(self):
         if not self._scan_result or not self._dest_config:
@@ -502,6 +526,7 @@ class MainWindow(QMainWindow):
         self._cancel_btn.setText("Cancel")
 
         self._importing = False
+        self._last_import_result = result
         self._file_progress.setVisible(False)
         self._file_progress.setValue(0)
 
@@ -522,6 +547,33 @@ class MainWindow(QMainWindow):
             self._set_status(result.summary())
             self._import_btn.setText("Import Complete ✓")
         self._import_btn.setEnabled(False)
+        self._report_btn.setVisible(True)
+
+    def _do_save_report(self):
+        if not self._last_import_result:
+            return
+        from backend.core.report import write_report
+        from datetime import datetime
+
+        default_dir = str(self._dest_config.photo_base.parent) if self._dest_config else str(Path.home())
+        default_name = f"media-porter-report_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.csv"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Import Report",
+            str(Path(default_dir) / default_name),
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not path:
+            return
+
+        dest_path = Path(path)
+        try:
+            written = write_report(self._last_import_result, dest_path.parent,
+                                   session_name=dest_path.stem)
+            self._set_status(f"Report saved: {written}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Report Failed", str(e))
 
     def _is_dest_drive(self, drive: DriveInfo) -> bool:
         mount = drive.mount_point

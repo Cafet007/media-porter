@@ -1,6 +1,6 @@
 # Media Porter — Master Plan
 
-Updated: April 6, 2026
+Updated: April 7, 2026
 
 ---
 
@@ -59,27 +59,33 @@ Trust should not be paywalled. Workflow acceleration should be.
 
 ### What is done
 
-| Area                     | Status |
-|--------------------------|--------|
-| Core import engine       | Done   |
-| Camera-aware scanning    | Done   |
-| EXIF + video metadata    | Done   |
-| Destination rules engine | Done   |
-| Atomic copy + safety     | Done   |
-| Drive detection + watcher| Done   |
-| Base GUI (PySide6)       | Done   |
-| Import history (DB)      | Done   |
-| Test suite (73/73)       | Done   |
+| Area                          | Status |
+|-------------------------------|--------|
+| Core import engine            | Done   |
+| Camera-aware scanning         | Done   |
+| EXIF + video metadata         | Done   |
+| Destination rules engine      | Done   |
+| Atomic copy + safety          | Done   |
+| Drive detection + watcher     | Done   |
+| Base GUI (PySide6)            | Done   |
+| Import history (DB)           | Done   |
+| Test suite (73/73)            | Done   |
+| Source card protection in GUI | Done   |
+| guard_write before mkdir      | Done   |
+| Duplicate identity (name+size)| Done   |
+| SHA256 post-copy verification | Done   |
+| Live verify status in UI      | Done   |
+| Verified count in DB sessions | Done   |
 
-### Known bugs (must fix before release)
+### Known bugs — all fixed
 
-| # | Location | Description |
-|---|----------|-------------|
-| 1 | `detector.py` + `source_panel.py:17,207` | Source card not registered as protected in GUI path |
-| 2 | `safety.py:177-180` | Dest directory created before `guard_write()` runs |
-| 3 | `main_window.py:379,423` / `importer.py:125` / `file_table.py:242` | Duplicate filename identity uses bare name instead of `(name, size)` |
-| 4 | `import_card.py:58` | CLI progress callback accepts 3 args, importer passes 5 |
-| 5 | `main_window.py:460` | Per-file progress bar shows batch bytes, not file bytes |
+| # | Location | Description | Status |
+|---|----------|-------------|--------|
+| 1 | `main_window.py` + `safety.py` | Source card not registered as protected in GUI | Fixed |
+| 2 | `safety.py` | Dest dir created before `guard_write()` | Fixed |
+| 3 | `main_window.py` / `importer.py` / `file_table.py` | Duplicate filename identity used bare name | Fixed |
+| 4 | `import_card.py` | CLI progress callback wrong arity | Fixed |
+| 5 | `main_window.py` | Per-file progress bar showed batch bytes | Fixed |
 
 ### Gaps vs competitors
 
@@ -87,7 +93,7 @@ Compared to OffShoot (the most relevant direct competitor):
 
 | Capability                  | OffShoot | Media Porter |
 |-----------------------------|----------|--------------|
-| Source + dest verification  | Yes      | Partial      |
+| Source + dest verification  | Yes      | **Yes**      |
 | Multiple checksum modes     | Yes      | No           |
 | Stop and resume             | Yes      | No           |
 | Incremental backup          | Yes      | No           |
@@ -99,8 +105,8 @@ Compared to OffShoot (the most relevant direct competitor):
 | Sidecar file handling       | Yes      | No           |
 | ASC MHL / S3 / Codex        | Yes (Pro)| No           |
 
-The gaps in the top half of that table (verification, resume, dual backup, presets, reports)
-are the ones that matter for a paid V1. The bottom half (MHL, S3, Codex) are out of scope.
+Verification is now done. The next gap that matters for a paid V1 is resume/recovery,
+then dual backup and presets.
 
 ---
 
@@ -110,17 +116,17 @@ are the ones that matter for a paid V1. The bottom half (MHL, S3, Codex) are out
 Target: April 2026 (2 weeks)
 Goal: app is safe and trustworthy on real shoots
 
-**Week 1 — Critical bugs**
+**Week 1 — Critical bugs** ✅ Complete
 
-- [ ] Fix safety gap: register source card as protected when selected in GUI
-- [ ] Fix write-before-guard: move dest directory creation to after `guard_write()` in `safety.py`
-- [ ] Fix duplicate filename identity: use `(name, size)` tuples throughout
-- [ ] Fix CLI: align `import_card.py` progress callback to 5-argument signature
+- [x] Fix safety gap: register source card as protected when selected in GUI
+- [x] Fix write-before-guard: move dest directory creation to after `guard_write()` in `safety.py`
+- [x] Fix duplicate filename identity: use `(name, size_bytes)` tuples throughout
+- [x] Fix CLI: align `import_card.py` progress callback to 7-argument signature
+- [x] Fix progress bars: per-file bar shows file bytes, overall bar shows batch bytes
 
-**Week 2 — Core missing features**
+**Week 2 — Core missing features** 🔧 In progress
 
-- [ ] Post-copy SHA256 verification: hash source before copy, hash dest after, show pass/fail in UI
-- [ ] Fix progress bars: per-file bar shows file bytes, overall bar shows batch bytes
+- [x] Post-copy SHA256 verification: hash source during copy, hash dest after rename, show live status in UI
 - [ ] Resume/recovery: on relaunch after crash, detect and skip already-copied files
 - [ ] Session report: plain CSV or text — copied, skipped, failed, verification status per file
 

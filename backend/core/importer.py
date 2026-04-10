@@ -23,7 +23,7 @@ from typing import Callable
 from .dedup import DedupChecker
 from .models import MediaFile
 from .rules import destination, DestinationConfig
-from .safety import safe_copy, verify_copy, SafetyError
+from .safety import safe_copy, verify_copy, cleanup_temp_files, SafetyError
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ def run_import(
     progress_cb: Callable[[int, int, str, int, int, int, int], None] | None = None,
     verify_cb: Callable[[str, bool], None] | None = None,
     cancel_event: threading.Event | None = None,
+    session_name: str = "",
 ) -> ImportResult:
     """
     Import new files from `files` using `config` for destination paths.
@@ -101,27 +102,48 @@ def run_import(
         ImportResult with copied / skipped / failed lists.
     """
     from .models import MediaType
-    from backend.db.repository import record_import, record_session
+    from backend.db.repository import record_import, record_session, get_imported_source_paths
 
     result = ImportResult()
     started_at = datetime.utcnow()
 
-    # Build dedup index across both destination roots
+    # Clean up any temp files left over from a previous crashed import
+    cleaned = cleanup_temp_files(config.photo_base, config.video_base)
+    if cleaned:
+        logger.info("Resume: removed %d stale temp file(s) from previous crashed import", cleaned)
+
+    # Build dedup index across both destination roots (filesystem check)
     checker_photos = DedupChecker(config.photo_base)
     checker_videos = DedupChecker(config.video_base)
     photo_count = checker_photos.build_index()
     video_count = checker_videos.build_index()
-    logger.info("Destination: %d photos, %d videos already imported", photo_count, video_count)
+    logger.info("Destination: %d photos, %d videos already on disk", photo_count, video_count)
 
-    # Split new vs already imported
+    # Split new vs already imported (filesystem dedup)
     videos = [f for f in files if f.media_type == MediaType.VIDEO]
     others = [f for f in files if f.media_type != MediaType.VIDEO]
 
     new_others, skip_others = checker_photos.filter_new(others)
     new_videos, skip_videos = checker_videos.filter_new(videos)
 
+    # Secondary DB-path dedup: catch files that were imported but moved/renamed on dest
+    # (filesystem dedup would miss these; DB source_path records are authoritative)
+    candidates = new_others + new_videos
+    if candidates:
+        source_paths = [str(f.path) for f in candidates]
+        already_in_db = get_imported_source_paths(source_paths)
+        if already_in_db:
+            db_skipped = [f for f in candidates if str(f.path) in already_in_db]
+            candidates  = [f for f in candidates if str(f.path) not in already_in_db]
+            logger.info(
+                "Resume: %d file(s) skipped via DB history (previously imported, dest may have moved)",
+                len(db_skipped),
+            )
+            skip_others = skip_others + [f for f in db_skipped if f.media_type != MediaType.VIDEO]
+            skip_videos = skip_videos + [f for f in db_skipped if f.media_type == MediaType.VIDEO]
+
     result.skipped = skip_others + skip_videos
-    new_files = new_others + new_videos
+    new_files = candidates
 
     if not new_files:
         logger.info("Nothing to import — all files already on destination.")
@@ -222,6 +244,7 @@ def run_import(
         verified    = result.total_verified,
         started_at  = started_at,
         finished_at = finished_at,
+        name        = session_name,
     )
 
     logger.info(

@@ -22,9 +22,18 @@ logger = logging.getLogger(__name__)
 
 
 class ScanResult:
-    def __init__(self, files: list[MediaFile], profile: CameraProfile | None = None):
+    def __init__(
+        self,
+        files: list[MediaFile],
+        profile: CameraProfile | None = None,
+        roots_scanned: dict[Path, int] | None = None,
+    ):
         self.files = files
         self.profile = profile  # detected camera profile
+        # Maps each folder root that was scanned → number of media files found in it.
+        # Populated by scan_card(). Lets the UI show exactly where files came from,
+        # so users can diagnose missing files across camera-specific folder layouts.
+        self.roots_scanned: dict[Path, int] = roots_scanned or {}
 
     @property
     def total(self) -> int:
@@ -97,16 +106,22 @@ def scan_card(
         logger.warning("No known camera folders found, scanning entire SD root")
         search_roots = [sd_root]
 
-    # Collect all candidate file paths across all search roots
-    all_paths: list[Path] = []
+    # Collect all candidate file paths per root (for per-folder diagnostics)
+    paths_by_root: dict[Path, list[Path]] = {}
     seen: set[Path] = set()
     for root in search_roots:
+        root_paths: list[Path] = []
         for p in root.rglob("*"):
             if p.is_file() and p not in seen and not _is_system_file(p):
-                all_paths.append(p)
+                root_paths.append(p)
                 seen.add(p)
+        paths_by_root[root] = root_paths
+
+    all_paths = [p for paths in paths_by_root.values() for p in paths]
 
     files: list[MediaFile] = []
+    # Track how many recognised media files came from each root
+    roots_scanned: dict[Path, int] = {root: 0 for root in search_roots}
 
     for idx, path in enumerate(all_paths):
         if progress_cb:
@@ -123,6 +138,15 @@ def scan_card(
             size=path.stat().st_size,
         ))
 
+        # Record which root this file belongs to
+        for root in search_roots:
+            try:
+                path.relative_to(root)
+                roots_scanned[root] += 1
+                break
+            except ValueError:
+                continue
+
     if progress_cb and all_paths:
         progress_cb(len(all_paths), len(all_paths), all_paths[-1])
 
@@ -134,7 +158,10 @@ def scan_card(
         sum(1 for f in files if f.media_type == MediaType.RAW),
         sum(1 for f in files if f.media_type == MediaType.VIDEO),
     )
-    return ScanResult(files, profile)
+    for root, count in roots_scanned.items():
+        logger.info("  %s → %d media files", root, count)
+
+    return ScanResult(files, profile, roots_scanned)
 
 
 def scan(
