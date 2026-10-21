@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QStatusBar, QMessageBox, QStackedWidget, QMenu,
     QFileDialog, QDialog, QApplication,
 )
-from PySide6.QtCore import Qt, Signal, QObject, QUrl
+from PySide6.QtCore import Qt, Signal, QObject, QUrl, QByteArray
 from PySide6.QtGui import QAction, QActionGroup, QFont, QDesktopServices, QGuiApplication, QKeySequence
 from gui.widgets.source_panel import ElidedLabel
 
@@ -36,6 +36,7 @@ from backend.utils.detector import DriveInfo, eject
 from backend.utils.config import (
     get_dest_paths, save_dest_paths, get_rules,
     get_theme_mode, save_theme_mode, get_auto_scan, save_auto_scan,
+    get_window_state, save_window_state,
 )
 from backend.utils.notify import notify
 from backend.utils.power import KeepAwake
@@ -116,6 +117,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         self._load_saved_config()
+        self._restore_window_state()
 
         # Follow macOS / Windows appearance changes while in System mode
         try:
@@ -151,6 +153,7 @@ class MainWindow(QMainWindow):
         # Center: stacked file table / history
         self._stack = QStackedWidget()
         self._file_table = FileTable()
+        self._file_table.selection_changed.connect(self._on_selection_changed)
         self._history_panel = HistoryPanel()
         self._summary_panel = SummaryPanel()
         self._summary_panel.reveal_requested.connect(self._reveal_destination)
@@ -558,7 +561,7 @@ class MainWindow(QMainWindow):
         if new_set is None:
             self._set_status("Could not check destination — see log for details")
             return
-        self._show_scan_result(self._scan_result, new_set)
+        self._show_scan_result(self._scan_result, new_set, keep_selection=True)
 
     def _do_scan(self):
         drive = self._selected_drive
@@ -649,17 +652,16 @@ class MainWindow(QMainWindow):
         if self._dest_config is not None and self._scan_config_stale:
             self._replan()
 
-    def _show_scan_result(self, result, new_set: set[str]):
+    def _show_scan_result(self, result, new_set: set[str], *, keep_selection: bool = False):
         self._new_set = new_set
-        self._file_table.load(result.files, new_set)
+        self._file_table.load(result.files, new_set, keep_selection=keep_selection)
         self._dest_panel.set_samples(result.files)
         profile_name = result.profile.name if result.profile else "Unknown"
         self._file_table.set_scan_info(profile_name, result.roots_scanned)
         new_count = len(new_set)
         already_count = result.total - new_count
         logger.info("Scan done: %d total, %d new", result.total, new_count)
-        self._import_btn.setEnabled(new_count > 0 and self._dest_config is not None)
-        self._import_btn.setText(f"Import {new_count} New Files →" if new_count else "Nothing to Import")
+        self._update_import_button(*self._file_table.selection_summary())
 
         if already_count > 0 and new_count > 0:
             self._set_status(
@@ -674,11 +676,33 @@ class MainWindow(QMainWindow):
                 f"Scanned: {result.total} files  ·  {new_count} new"
             )
 
+    def _on_selection_changed(self, count: int, size: int):
+        if not self._importing:
+            self._update_import_button(count, size)
+
+    def _update_import_button(self, count: int, size: int):
+        """Label and enable the Import button from the user's selection."""
+        new_count = len(self._new_set)
+        if new_count == 0:
+            text = "Nothing to Import"
+        elif count == 0:
+            text = "Select Files to Import"
+        elif count == new_count:
+            text = f"Import {count} New Files →"
+        else:
+            text = f"Import {count} Selected →"
+        self._import_btn.setText(text)
+        self._import_btn.setEnabled(
+            count > 0 and self._dest_config is not None and self._scan_result is not None
+        )
+
     def _do_import(self):
         if not self._scan_result or not self._dest_config or self._importing or self._scanning:
             return
 
-        new_files = [f for f in self._scan_result.files if str(f.path) in self._new_set]
+        new_files = self._file_table.checked_files()
+        if not new_files:
+            return
         if not self._check_space(new_files):
             return
 
@@ -721,6 +745,7 @@ class MainWindow(QMainWindow):
         session_name = self._session_name
 
         self._importing = True
+        self._file_table.set_locked(True)
         self._keep_awake.start()
         self._import_started_at = time.monotonic()
         self._speed_samples.clear()
@@ -953,7 +978,37 @@ class MainWindow(QMainWindow):
                 return
             self._cancel_event.set()
         self._keep_awake.stop()
+        self._save_window_state()
         event.accept()
+
+    def _restore_window_state(self):
+        state = get_window_state()
+        geometry = state.get("geometry")
+        if isinstance(geometry, str) and geometry:
+            self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
+        sizes = state.get("sizes")
+        if isinstance(sizes, list) and len(sizes) == 3 and all(isinstance(x, int) for x in sizes):
+            self._last_source_width = max(sizes[0], 180)
+            self._last_dest_width = max(sizes[2], 200)
+            self._splitter.setSizes(sizes)
+        if state.get("show_drives") is False:
+            self._show_drives_action.setChecked(False)
+        if state.get("show_destination") is False:
+            self._show_destination_action.setChecked(False)
+        if state.get("file_view") in ("list", "grid"):
+            self._file_table.set_view_mode(state["file_view"])
+
+    def _save_window_state(self):
+        sizes = self._splitter.sizes()
+        source = sizes[0] if self._source_panel_visible and sizes[0] > 0 else self._last_source_width
+        dest = sizes[2] if self._dest_panel_visible and sizes[2] > 0 else self._last_dest_width
+        save_window_state({
+            "geometry": bytes(self.saveGeometry().toBase64()).decode("ascii"),
+            "sizes": [int(source), int(sizes[1]), int(dest)],
+            "show_drives": self._source_panel_visible,
+            "show_destination": self._dest_panel_visible,
+            "file_view": self._file_table.view_mode(),
+        })
 
     def _do_save_report(self):
         if not self._last_import_result:

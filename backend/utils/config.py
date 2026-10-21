@@ -134,3 +134,15 @@ def save_auto_scan(enabled: bool) -> None:
     data = load()
     data.setdefault("ui", {})["auto_scan"] = enabled
     save(data)
+
+
+def get_window_state() -> dict:
+    """Saved window layout: geometry, sidebar widths/visibility, file view mode."""
+    state = load().get("window", {})
+    return state if isinstance(state, dict) else {}
+
+
+def save_window_state(state: dict) -> None:
+    data = load()
+    data["window"] = state
+    save(data)

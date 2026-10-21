@@ -38,3 +38,11 @@ def test_auto_scan_default_and_round_trip():
     assert config.get_auto_scan() is True
     config.save_auto_scan(False)
     assert config.get_auto_scan() is False
+
+
+def test_window_state_round_trip():
+    assert config.get_window_state() == {}
+    state = {"geometry": "AdnQywADAAA=", "sizes": [240, 700, 260],
+             "show_drives": True, "show_destination": False, "file_view": "grid"}
+    config.save_window_state(state)
+    assert config.get_window_state() == state
