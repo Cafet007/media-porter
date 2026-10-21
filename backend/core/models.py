@@ -66,9 +66,5 @@ class MediaFile:
     def size_mb(self) -> float:
         return round(self.size / 1_048_576, 2)
 
-    @property
-    def size_mb(self) -> float:
-        return round(self.size / 1_048_576, 2)
-
     def __repr__(self) -> str:
         return f"MediaFile({self.name}, {self.media_type.value}, {self.size_mb}MB)"

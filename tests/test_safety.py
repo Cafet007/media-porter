@@ -5,7 +5,7 @@ from pathlib import Path
 from backend.core.safety import (
     protect, unprotect, is_protected,
     guard_write, guard_delete, guard_same_path, guard_space,
-    cleanup_temp_files, safe_copy,
+    cleanup_temp_files, safe_copy, verify_copy,
     SafetyError, _protected_roots,
 )
 
@@ -110,6 +110,19 @@ def test_cleanup_recurses_into_subdirs(tmp_path):
     assert not (sub / ".mporter_tmp_deep").exists()
 
 
+def test_cleanup_non_recursive_skips_subdirs(tmp_path):
+    dest = tmp_path / "dest"
+    sub = dest / "JPG" / "2026-04-07"
+    sub.mkdir(parents=True)
+    (dest / ".mporter_tmp_top").write_bytes(b"partial")
+    (sub / ".mporter_tmp_deep").write_bytes(b"partial")
+
+    removed = cleanup_temp_files(dest, recursive=False)
+    assert removed == 1
+    assert not (dest / ".mporter_tmp_top").exists()
+    assert (sub / ".mporter_tmp_deep").exists()
+
+
 def test_cleanup_nonexistent_dir_is_safe(tmp_path):
     removed = cleanup_temp_files(tmp_path / "does_not_exist")
     assert removed == 0
@@ -121,3 +134,22 @@ def test_cleanup_returns_zero_when_no_temps(tmp_path):
     (dest / "IMG001.jpg").write_bytes(b"real")
     removed = cleanup_temp_files(dest)
     assert removed == 0
+
+
+# ---------------------------------------------------------------------------
+# verify_copy
+# ---------------------------------------------------------------------------
+
+def test_verify_copy_matches(tmp_path):
+    src = tmp_path / "a.jpg"
+    src.write_bytes(b"data" * 100)
+    dst, file_hash = safe_copy(src, tmp_path / "out" / "a.jpg")
+    assert verify_copy(dst, file_hash) is True
+
+
+def test_verify_copy_returns_false_on_mismatch(tmp_path):
+    src = tmp_path / "a.jpg"
+    src.write_bytes(b"data" * 100)
+    dst, file_hash = safe_copy(src, tmp_path / "out" / "a.jpg")
+    dst.write_bytes(b"corrupted")
+    assert verify_copy(dst, file_hash) is False

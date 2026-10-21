@@ -98,3 +98,39 @@ def save_dark_mode(dark: bool) -> None:
     data = load()
     data.setdefault("ui", {})["dark_mode"] = dark
     save(data)
+
+
+THEME_MODES = ("system", "light", "dark")
+
+
+def get_theme_mode() -> str:
+    """
+    Return "system", "light" or "dark". Configs written before the System
+    option existed only have ui.dark_mode — honour that choice.
+    """
+    ui = load().get("ui", {})
+    mode = ui.get("theme")
+    if mode in THEME_MODES:
+        return mode
+    if "dark_mode" in ui:
+        return "dark" if ui["dark_mode"] else "light"
+    return "system"
+
+
+def save_theme_mode(mode: str) -> None:
+    if mode not in THEME_MODES:
+        raise ValueError(f"Unknown theme mode: {mode!r}")
+    data = load()
+    data.setdefault("ui", {})["theme"] = mode
+    save(data)
+
+
+def get_auto_scan() -> bool:
+    """Return True if a newly inserted camera card should be scanned automatically."""
+    return bool(load().get("ui", {}).get("auto_scan", True))
+
+
+def save_auto_scan(enabled: bool) -> None:
+    data = load()
+    data.setdefault("ui", {})["auto_scan"] = enabled
+    save(data)

@@ -17,6 +17,7 @@ import hashlib
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -153,7 +154,11 @@ def check_batch_space(files: list, config) -> list[str]:
 # Safe file copy — atomic (temp file → rename)
 # ---------------------------------------------------------------------------
 
-_CHUNK = 16 * 1024 * 1024  # larger chunks improve video throughput
+_CHUNK = 8 * 1024 * 1024
+# Flush written data to disk every N bytes. Without this the OS buffers
+# gigabytes of dirty pages for a slow USB/exFAT drive, which starves memory
+# and stalls the whole machine while the cache drains.
+_FLUSH_EVERY = 128 * 1024 * 1024
 _copy_locks_guard = threading.Lock()
 _copy_locks: dict[Path, threading.Lock] = {}
 
@@ -168,15 +173,50 @@ def _lock_for(path: Path) -> threading.Lock:
         return lock
 
 
+def _bypass_cache(fd: int) -> None:
+    """
+    Ask the OS not to keep this file's pages in the buffer cache (best effort).
+
+    macOS: F_NOCACHE makes reads/writes go straight to the device.
+    Elsewhere this is a no-op; Linux uses _drop_cache() after fsync instead.
+    """
+    if sys.platform == "darwin":
+        try:
+            import fcntl
+            fcntl.fcntl(fd, fcntl.F_NOCACHE, 1)
+        except (ImportError, AttributeError, OSError):
+            pass
+
+
+def _drop_cache(fd: int) -> None:
+    """Evict already-flushed pages of fd from the page cache (Linux, best effort)."""
+    if hasattr(os, "posix_fadvise"):
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        except OSError:
+            pass
+
+
 def hash_file(
     path: Path,
     bytes_cb: Callable[[int, int], None] | None = None,
+    *,
+    uncached: bool = False,
 ) -> str:
-    """Return the SHA256 hex digest for a file."""
+    """
+    Return the SHA256 hex digest for a file.
+
+    uncached=True reads from the device rather than the OS cache where the
+    platform allows it — used for post-copy verification, so a match proves
+    the bytes actually landed on disk.
+    """
     total_bytes = path.stat().st_size
     bytes_done = 0
     hasher = hashlib.sha256()
     with open(path, "rb") as f:
+        if uncached:
+            _bypass_cache(f.fileno())
+            _drop_cache(f.fileno())
         while True:
             chunk = f.read(_CHUNK)
             if not chunk:
@@ -267,8 +307,11 @@ def safe_copy(
             os.close(fd)
 
             written = 0
+            unflushed = 0
             hasher = hashlib.sha256()
             with open(src, "rb") as fsrc, open(tmp_path, "wb") as fdst:
+                _bypass_cache(fsrc.fileno())
+                _bypass_cache(fdst.fileno())
                 while True:
                     chunk = fsrc.read(_CHUNK)
                     if not chunk:
@@ -276,8 +319,14 @@ def safe_copy(
                     fdst.write(chunk)
                     hasher.update(chunk)
                     written += len(chunk)
+                    unflushed += len(chunk)
+                    if unflushed >= _FLUSH_EVERY:
+                        _flush(fdst)
+                        unflushed = 0
                     if bytes_cb:
                         bytes_cb(written, total_bytes)
+                # Make sure the data is on disk before the file becomes visible
+                _flush(fdst)
 
             file_hash = hasher.hexdigest()
 
@@ -302,22 +351,30 @@ def safe_copy(
                     pass
 
 
+def _flush(f) -> None:
+    """Push buffered writes to the device and release their cache pages."""
+    f.flush()
+    os.fsync(f.fileno())
+    _drop_cache(f.fileno())
+
+
 def verify_copy(
     dst: Path,
     expected_hash: str,
     bytes_cb: Callable[[int, int], None] | None = None,
 ) -> bool:
     """
-    Hash the destination file and confirm it matches expected_hash (SHA256 hex).
-    Returns True on match.
-    Raises SafetyError if the hashes differ (copy is corrupted).
+    Re-read the destination file from disk and confirm it matches
+    expected_hash (SHA256 hex). Returns True on match, False if the copy
+    is corrupted. Raises OSError if the file cannot be read.
     """
-    actual = hash_file(dst, bytes_cb=bytes_cb)
+    actual = hash_file(dst, bytes_cb=bytes_cb, uncached=True)
     if actual != expected_hash:
-        raise SafetyError(
-            f"VERIFICATION FAILED: '{dst.name}' — "
-            f"expected {expected_hash[:12]}… got {actual[:12]}…"
+        logger.error(
+            "VERIFICATION FAILED: '%s' — expected %s… got %s…",
+            dst, expected_hash[:12], actual[:12],
         )
+        return False
     logger.info("Verified: %s  [sha256: %s…]", dst.name, actual[:12])
     return True
 
@@ -329,17 +386,23 @@ def verify_copy(
 _TMP_PREFIX = ".mporter_tmp_"
 
 
-def cleanup_temp_files(*directories: Path) -> int:
+def cleanup_temp_files(*directories: Path, recursive: bool = True) -> int:
     """
     Remove any leftover .mporter_tmp_* files from a previous crashed import.
     Safe to call before every import run.
+
+    recursive=False only checks the given folders themselves — much cheaper
+    than walking a multi-terabyte archive when we know which folders we'll
+    write into.
+
     Returns the number of temp files removed.
     """
     removed = 0
     for directory in directories:
         if not directory.exists():
             continue
-        for tmp in directory.rglob(f"{_TMP_PREFIX}*"):
+        matches = directory.rglob(f"{_TMP_PREFIX}*") if recursive else directory.glob(f"{_TMP_PREFIX}*")
+        for tmp in matches:
             if tmp.is_file():
                 try:
                     tmp.unlink()

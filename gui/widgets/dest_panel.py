@@ -9,11 +9,12 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QFileDialog, QFrame
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 from pathlib import Path
 
-from backend.core.rules import DestinationConfig
+from backend.core.models import MediaFile, MediaType
+from backend.core.rules import DestinationConfig, DEFAULT_TEMPLATES, preview_template, resolve_template
 from gui.theme import T
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,9 @@ class DestPanel(QWidget):
         super().__init__(parent)
         self.setMinimumWidth(200)
         self.setMaximumWidth(320)
+        self._templates: dict = dict(DEFAULT_TEMPLATES)
+        # One real scanned file per kind, so the preview shows actual dates/names
+        self._samples: dict[str, MediaFile] = {}
         self._build()
 
     def _build(self):
@@ -126,7 +130,7 @@ class DestPanel(QWidget):
         pb_inner.setContentsMargins(14, 12, 14, 12)
         pb_inner.setSpacing(6)
 
-        self._preview_title = QLabel("FOLDER STRUCTURE")
+        self._preview_title = QLabel("WHERE FILES WILL GO")
         ptf = QFont()
         ptf.setPixelSize(10)
         ptf.setBold(True)
@@ -136,6 +140,7 @@ class DestPanel(QWidget):
         self._preview = QLabel(self._structure_text())
         self._preview.setFont(QFont("Menlo, Courier New, monospace", 11))
         self._preview.setWordWrap(True)
+        self._preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
         pb_inner.addWidget(self._preview)
 
         body_layout.addWidget(self._preview_box)
@@ -167,16 +172,48 @@ class DestPanel(QWidget):
         self._photo_row.apply_theme()
         self._video_row.apply_theme()
 
+    def set_templates(self, templates: dict):
+        """Folder rules changed — refresh the preview."""
+        self._templates = {**DEFAULT_TEMPLATES, **templates}
+        self._preview.setText(self._structure_text())
+
+    def set_samples(self, files: list[MediaFile]):
+        """Use the first scanned file of each kind as the preview example."""
+        self._samples = {}
+        for f in files:
+            key = _template_key(f.media_type)
+            self._samples.setdefault(key, f)
+        self._preview.setText(self._structure_text())
+
     def _structure_text(self) -> str:
-        return (
-            "Photos/\n"
-            "  RAW/\n"
-            "    2026-03-24/\n"
-            "  JPG/\n"
-            "    2026-03-24/\n\n"
-            "Footage/\n"
-            "  2026-03-24/"
-        )
+        """
+        Example destination for each kind of file, resolved from the actual
+        folder rules — and from real scanned files when we have them.
+        """
+        photo_root = self._photo_row.path().name or "Photos"
+        video_root = self._video_row.path().name or "Videos"
+
+        groups: dict[str, list[str]] = {}
+        for key in ("raw", "photo", "video"):
+            template = self._templates.get(key, DEFAULT_TEMPLATES[key])
+            sample = self._samples.get(key)
+            rel = resolve_template(template, sample) if sample else preview_template(template, key)
+            root = video_root if key == "video" else photo_root
+            groups.setdefault(root, []).append(rel)
+
+        lines = []
+        for root, rels in groups.items():
+            if lines:
+                lines.append("")
+            lines.append(f"{root}/")
+            for rel in rels:
+                folder, _, name = rel.rpartition("/")
+                if folder:
+                    lines.append(f"  {folder}/")
+                    lines.append(f"    {name}")
+                else:
+                    lines.append(f"  {name}")
+        return "\n".join(lines)
 
     def set_paths(self, photo: str, video: str):
         self._photo_row.set_path(photo)
@@ -198,3 +235,11 @@ class DestPanel(QWidget):
             photo_base=self._photo_row.path(),
             video_base=self._video_row.path(),
         )
+
+
+def _template_key(media_type: MediaType) -> str:
+    if media_type == MediaType.VIDEO:
+        return "video"
+    if media_type == MediaType.RAW:
+        return "raw"
+    return "photo"

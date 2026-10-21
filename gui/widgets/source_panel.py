@@ -7,6 +7,7 @@ No internal header bar; section labels are inline.
 
 from __future__ import annotations
 import logging
+import threading
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea
@@ -120,6 +121,9 @@ class DriveCard(QFrame):
 
 class SourcePanel(QWidget):
     drive_selected = Signal(object)
+    card_inserted  = Signal(object)   # a single new camera card was auto-selected
+    drive_removed  = Signal(object)   # the selected drive was unplugged
+    _drives_ready  = Signal(object)   # emitted from the polling thread
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -127,6 +131,12 @@ class SourcePanel(QWidget):
         self.setMaximumWidth(320)
         self._all_cards: list[DriveCard] = []
         self._selected_drive: DriveInfo | None = None
+        self._drives: list[DriveInfo] | None = None
+        self._fingerprint: tuple | None = None
+        self._card_ids: set[str] = set()
+        self._polling = False
+        self._paused = False
+        self._drives_ready.connect(self._on_drives_ready)
         self._build()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._auto_refresh)
@@ -199,13 +209,86 @@ class SourcePanel(QWidget):
             f" QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
         )
         self._body.setStyleSheet(f"background: {T.BG_SIDEBAR};")
-        self.refresh()
+        if self._drives is not None:
+            self._rebuild(self._drives)
+        else:
+            self.refresh()
+
+    def set_paused(self, paused: bool):
+        """
+        Pause automatic polling — used during imports. Querying a drive that
+        is busy with a large copy (diskutil, disk_usage) is slow and only adds
+        I/O load, and nothing in the sidebar needs to change mid-import.
+        """
+        self._paused = paused
 
     def _auto_refresh(self):
-        self.refresh()
+        if not self._paused:
+            self.refresh()
 
     def refresh(self):
-        drives  = list_drives()
+        """
+        Re-detect drives on a background thread. Drive detection shells out to
+        diskutil per volume and can block for seconds, so it must never run
+        on the UI thread.
+        """
+        if self._polling:
+            return
+        self._polling = True
+
+        def _worker():
+            try:
+                drives = list_drives()
+            except Exception as e:
+                logger.error("Drive detection failed: %s", e)
+                drives = None
+            try:
+                self._drives_ready.emit(drives)
+            except RuntimeError:
+                pass   # panel was destroyed while polling (app quitting)
+
+        threading.Thread(target=_worker, daemon=True, name="DrivePoll").start()
+
+    def _on_drives_ready(self, drives: list[DriveInfo] | None):
+        self._polling = False
+        if drives is None:
+            return
+        fingerprint = tuple(
+            (d.unique_id, str(d.mount_point), d.label, d.is_camera_card, d.free_gb)
+            for d in drives
+        )
+        if fingerprint == self._fingerprint:
+            return   # nothing changed — don't tear down and rebuild the cards
+        self._fingerprint = fingerprint
+        self._drives = drives
+
+        ids = {d.unique_id for d in drives}
+        lost = self._selected_drive
+        if lost is not None and lost.unique_id not in ids:
+            self._selected_drive = None
+        else:
+            lost = None
+
+        cards = [d for d in drives if d.is_camera_card]
+        new_cards = [d for d in cards if d.unique_id not in self._card_ids]
+        self._card_ids = {d.unique_id for d in cards}
+
+        # Exactly one camera card and it just appeared → select it for the user
+        auto = None
+        if len(cards) == 1 and new_cards and (
+            self._selected_drive is None or not self._selected_drive.is_camera_card
+        ):
+            auto = cards[0]
+            self._selected_drive = auto
+
+        self._rebuild(drives)
+
+        if lost is not None:
+            self.drive_removed.emit(lost)
+        if auto is not None:
+            self.card_inserted.emit(auto)
+
+    def _rebuild(self, drives: list[DriveInfo]):
         cards   = [d for d in drives if d.is_camera_card]
         storage = [d for d in drives if d.is_external_drive]
 
@@ -266,6 +349,11 @@ class SourcePanel(QWidget):
         for card in self._all_cards:
             card.set_selected(card.drive.unique_id == drive.unique_id)
         self.drive_selected.emit(drive)
+
+    def clear_selection(self):
+        self._selected_drive = None
+        for card in self._all_cards:
+            card.set_selected(False)
 
     def selected_drive(self) -> DriveInfo | None:
         return self._selected_drive

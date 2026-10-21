@@ -127,6 +127,40 @@ def find_external_drives() -> list[DriveInfo]:
     return [d for d in list_drives() if not d.has_dcim]
 
 
+def eject(mount_point: Path) -> tuple[bool, str]:
+    """
+    Safely eject (unmount) a drive. Blocks for up to ~30 s — call it off the
+    UI thread. Returns (ok, message) where message is user-presentable.
+    """
+    mount = str(mount_point)
+    try:
+        if OS == "Darwin":
+            cmd = ["diskutil", "eject", mount]
+        elif OS == "Windows":
+            drive = mount.rstrip("\\/")
+            script = (
+                "(New-Object -ComObject Shell.Application).Namespace(17)"
+                f".ParseName('{drive}').InvokeVerb('Eject')"
+            )
+            cmd = ["powershell", "-NoProfile", "-Command", script]
+        else:
+            cmd = ["umount", mount]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        logger.error("Eject failed for %s: %s", mount, e)
+        return False, f"Could not eject: {e}"
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        logger.error("Eject failed for %s: %s", mount, detail)
+        if "in use" in detail.lower() or "busy" in detail.lower():
+            return False, "The card is still in use by another app. Close it and try again."
+        return False, f"Could not eject the card. {detail}".strip()
+
+    logger.info("Ejected %s", mount)
+    return True, "Card ejected — safe to remove"
+
+
 def watch(
     on_insert: Callable[[DriveInfo], None],
     on_remove: Callable[[DriveInfo], None] | None = None,

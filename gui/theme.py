@@ -39,7 +39,7 @@ class Theme:
 
             self.TEXT_PRIMARY   = "#f0f0f0"
             self.TEXT_SECONDARY = "#8e8e93"
-            self.TEXT_MUTED     = "#48484a"
+            self.TEXT_MUTED     = "#7c7c82"   # ≥4.5:1 on BG_BASE for readable hints
             self.TEXT_LABEL     = "#aeaeb2"
 
             self.ACCENT         = "#0a84ff"
@@ -78,7 +78,7 @@ class Theme:
 
             self.TEXT_PRIMARY   = "#1c1c1e"
             self.TEXT_SECONDARY = "#3c3c43"
-            self.TEXT_MUTED     = "#aeaeb2"
+            self.TEXT_MUTED     = "#6e6e73"   # ≥4.5:1 on BG_BASE for readable hints
             self.TEXT_LABEL     = "#3c3c43"
 
             self.ACCENT         = "#007aff"
@@ -358,6 +358,43 @@ class Theme:
 # Global singleton
 # ---------------------------------------------------------------------------
 T = Theme()
+
+
+def system_prefers_dark() -> bool:
+    """True when the OS appearance is Dark (Qt 6.5+; False if unknown)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+    try:
+        return QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+    except AttributeError:
+        return False
+
+
+def apply_app_palette() -> None:
+    """
+    Set the application-wide QPalette from the current theme, so dialogs,
+    menus, tooltips and message boxes match the window instead of always
+    being dark.
+    """
+    from PySide6.QtGui import QColor, QGuiApplication, QPalette
+    app = QGuiApplication.instance()
+    if app is None:
+        return
+    p = QPalette()
+    p.setColor(QPalette.Window,          QColor(T.BG_BASE))
+    p.setColor(QPalette.WindowText,      QColor(T.TEXT_PRIMARY))
+    p.setColor(QPalette.Base,            QColor(T.BG_INPUT))
+    p.setColor(QPalette.AlternateBase,   QColor(T.BG_TABLE_ALT))
+    p.setColor(QPalette.Text,            QColor(T.TEXT_PRIMARY))
+    p.setColor(QPalette.PlaceholderText, QColor(T.TEXT_MUTED))
+    p.setColor(QPalette.Button,          QColor(T.BG_CARD))
+    p.setColor(QPalette.ButtonText,      QColor(T.TEXT_PRIMARY))
+    p.setColor(QPalette.Highlight,       QColor(T.ACCENT))
+    p.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    p.setColor(QPalette.ToolTipBase,     QColor(T.BG_CARD))
+    p.setColor(QPalette.ToolTipText,     QColor(T.TEXT_PRIMARY))
+    p.setColor(QPalette.Link,            QColor(T.ACCENT))
+    app.setPalette(p)
 
 # ---------------------------------------------------------------------------
 # Module-level aliases (backward compat)

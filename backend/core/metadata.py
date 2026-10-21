@@ -9,8 +9,11 @@ Dependencies:
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from .models import MediaFile, MediaType
 
@@ -39,10 +42,36 @@ def extract(file: MediaFile) -> MediaFile:
     return file
 
 
-def extract_all(files: list[MediaFile]) -> list[MediaFile]:
-    """Enrich a list of MediaFile objects. Returns the same list."""
-    for f in files:
+_EXTRACT_WORKERS = 4  # metadata reads are small and I/O-bound — overlap them
+
+
+def extract_all(
+    files: list[MediaFile],
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> list[MediaFile]:
+    """
+    Enrich a list of MediaFile objects in parallel. Returns the same list.
+
+    progress_cb(done, total) is called from worker threads as files finish.
+    """
+    total = len(files)
+    if total == 0:
+        return files
+
+    done = 0
+    lock = threading.Lock()
+
+    def _one(f: MediaFile) -> None:
+        nonlocal done
         extract(f)
+        if progress_cb:
+            with lock:
+                done += 1
+                n = done
+            progress_cb(n, total)
+
+    with ThreadPoolExecutor(max_workers=_EXTRACT_WORKERS) as pool:
+        list(pool.map(_one, files))
     return files
 
 

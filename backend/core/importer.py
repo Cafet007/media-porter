@@ -23,7 +23,7 @@ from typing import Callable
 
 from .models import MediaFile, MediaType
 from .rules import DEFAULT_TEMPLATES, destination, DestinationConfig
-from .safety import safe_copy, verify_copy, cleanup_temp_files, SafetyError, hash_file
+from .safety import safe_copy, verify_copy, cleanup_temp_files, hash_file
 
 logger = logging.getLogger(__name__)
 
@@ -161,11 +161,6 @@ def run_import(
     result = ImportResult()
     started_at = datetime.utcnow()
 
-    # Clean up any temp files left over from a previous crashed import
-    cleaned = cleanup_temp_files(config.photo_base, config.video_base)
-    if cleaned:
-        logger.info("Resume: removed %d stale temp file(s) from previous crashed import", cleaned)
-
     plan = plan_import(files, config)
     result.skipped = list(plan.skipped)
     result.conflicts = list(plan.conflicts)
@@ -174,6 +169,14 @@ def run_import(
     if not new_files:
         logger.info("Nothing to import — all files already on destination.")
         return result
+
+    # Clean up temp files left over from a previous crashed import — only in
+    # the folders this run writes to, so we never walk the whole archive.
+    cleaned = cleanup_temp_files(
+        *{item.dest_path.parent for item in new_files}, recursive=False,
+    )
+    if cleaned:
+        logger.info("Resume: removed %d stale temp file(s) from previous crashed import", cleaned)
 
     total = len(new_files)
     total_bytes = sum(item.file.size_bytes for item in new_files)
@@ -243,8 +246,6 @@ def run_import(
             copied_to, file_hash = safe_copy(file.path, dest_path, bytes_cb=_bytes_cb)
             verify_ok = verify_copy(copied_to, file_hash, bytes_cb=_verify_bytes_cb)
             return file, copied_to, file_hash, verify_ok, None
-        except SafetyError as e:
-            return file, None, None, False, str(e)
         except Exception as e:
             return file, None, None, False, str(e)
 
@@ -269,8 +270,13 @@ def run_import(
                         result.verified.append(file)
                     else:
                         result.verify_failed.append(file)
-                record_import(file, copied_to)
-                logger.debug("Copied [%d/%d] %s → %s", _done, total, file.name, copied_to)
+                if verify_ok:
+                    record_import(file, copied_to)
+                    logger.debug("Copied [%d/%d] %s → %s", _done, total, file.name, copied_to)
+                else:
+                    # Not recorded in history, so the next run re-checks this
+                    # file (it will show as a conflict against the bad copy).
+                    logger.error("Verify failed [%d/%d] %s → %s", _done, total, file.name, copied_to)
                 # Emit a final 100% progress event for this file
                 if progress_cb:
                     with lock:
@@ -291,7 +297,7 @@ def run_import(
     record_session(
         source_root = source_root,
         dest_root   = config.photo_base.parent,
-        total       = total,
+        total       = len(files),
         imported    = result.total_copied,
         skipped     = result.total_skipped,
         errors      = result.total_failed,

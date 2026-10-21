@@ -92,6 +92,8 @@ class _SortableItem(QTableWidgetItem):
 class FileTable(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        # filename → its Status cell, so progress updates don't scan every row
+        self._status_items: dict[str, QTableWidgetItem] = {}
         self._build()
 
     def _build(self):
@@ -237,6 +239,7 @@ class FileTable(QWidget):
     def load(self, files: list[MediaFile], new_set: set[str] | None = None):
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(files))
+        self._status_items.clear()
 
         new_count = skipped_count = 0
 
@@ -271,6 +274,7 @@ class FileTable(QWidget):
 
             for col, item in enumerate([name_item, kind_item, date_item, size_item, status_item]):
                 self._table.setItem(row, col, item)
+            self._status_items[f.name] = status_item
             self._table.setRowHeight(row, 32)
 
         self._table.setSortingEnabled(True)
@@ -284,22 +288,18 @@ class FileTable(QWidget):
         self._empty.hide()
         self._table.show()
 
-    def _update_status(self, filename: str, text: str, color: str):
-        for row in range(self._table.rowCount()):
-            item = self._table.item(row, 0)
-            if item and item.text() == filename:
-                si = QTableWidgetItem(text)
-                si.setForeground(QColor(color))
-                self._table.setItem(row, 4, si)
-                break
+    def _update_status(self, filename: str, text: str, color: str) -> QTableWidgetItem | None:
+        item = self._status_items.get(filename)
+        if item is None or item.text() == text:
+            return item   # unchanged — skip the repaint
+        item.setText(text)
+        item.setForeground(QColor(color))
+        return item
 
     def mark_in_progress(self, filename: str):
-        self._update_status(filename, "In Progress…", T.WARNING)
-        for row in range(self._table.rowCount()):
-            item = self._table.item(row, 0)
-            if item and item.text() == filename:
-                self._table.scrollToItem(self._table.item(row, 4))
-                break
+        item = self._update_status(filename, "In Progress…", T.WARNING)
+        if item is not None:
+            self._table.scrollToItem(item)
 
     def mark_copied(self, filename: str):
         self._update_status(filename, "Copied ✓", T.SUCCESS)
@@ -320,6 +320,7 @@ class FileTable(QWidget):
         self._update_status(filename, "Failed ✗", T.DANGER)
 
     def clear(self):
+        self._status_items.clear()
         self._table.setRowCount(0)
         self._table.hide()
         self._empty.show()

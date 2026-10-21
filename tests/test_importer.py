@@ -304,3 +304,32 @@ def test_run_import_conflict_when_dest_exists(src, config):
     result = run_import([f], config)
     assert result.total_conflicts == 1
     assert result.total_failed    == 0
+
+
+def test_run_import_reports_verify_failure_and_does_not_record(src, config, monkeypatch):
+    import backend.core.importer as importer
+    from backend.db.repository import is_path_imported
+
+    monkeypatch.setattr(importer, "verify_copy", lambda *a, **kw: False)
+    f = _make_file(src, "IMG001.JPG", MediaType.PHOTO)
+    verified = []
+    result = run_import([f], config, verify_cb=lambda name, ok: verified.append((name, ok)))
+
+    assert result.total_copied        == 1
+    assert result.total_verify_failed == 1
+    assert result.total_verified      == 0
+    assert result.total_failed        == 0
+    assert verified == [("IMG001.JPG", False)]
+    # A bad copy must not count as imported, or the next run would skip it
+    assert not is_path_imported(f.path)
+
+
+def test_run_import_cleans_stale_temp_in_dest_folder(src, config):
+    f = _make_file(src, "IMG001.JPG", MediaType.PHOTO)
+    dest_dir = config.photo_base / "JPG" / "2026-03-24"
+    dest_dir.mkdir(parents=True)
+    stale = dest_dir / ".mporter_tmp_crashed"
+    stale.write_bytes(b"partial")
+
+    run_import([f], config)
+    assert not stale.exists()

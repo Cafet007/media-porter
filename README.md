@@ -6,7 +6,7 @@ A cross-platform desktop application for importing media from camera SD cards to
 
 ## Features
 
-- **Automatic SD card detection** — detects cards via direct slot or USB dongle
+- **Automatic SD card detection** — detects cards via direct slot or USB dongle; a newly inserted card is selected and scanned automatically (toggle in Settings)
 - **Camera-aware scanning** — handles Sony, Canon, Nikon, Fuji, GoPro, DJI folder structures (Sony MP4s in `PRIVATE/M4ROOT/CLIP/` are found automatically)
 - **Smart deduplication** — skips files already on your drive (filename + size match)
 - **SHA256 post-copy verification** — confirms every copied file matches the source
@@ -16,10 +16,14 @@ A cross-platform desktop application for importing media from camera SD cards to
 - **Non-destructive** — always copies, never moves or deletes; source card is never touched
 - **Atomic file copy** — writes to a temp file first, renames only on success; no partial files on failure
 - **Pre-import space check** — warns before starting if destination drive lacks space
-- **Dual progress bars** — overall import progress + per-file within-file bar (updates every 4 MB)
+- **Dual progress bars** — overall import progress + per-file bar, with copy speed and time remaining
+- **Stays responsive during big copies** — writes bypass the OS cache and are flushed regularly, so slow USB drives can't stall the app or the computer; verification re-reads from disk
+- **Completion summary** — totals, plain-language problems, Show in Finder, Eject Card, Save Report, Retry Failed
+- **Done notification** — system notification and sound when an import finishes; the Mac is kept awake while copying
 - **Cancel anytime** — stop import cleanly between files; already-copied files are kept
 - **Sortable file table** — click any column header to sort by name, type, size, or date
-- **Dark / Light theme** — toggle between dark and gray glossy themes
+- **Appearance** — Match System, Light, or Dark (View → Appearance)
+- **Keyboard shortcuts** — ⌘R scan, ⌘I import, ⌘. cancel, ⌘E eject, ⌘1/⌘2 Files/History
 - **Persistent config** — destination paths and folder rules saved across launches
 - **Full logging** — rotating log at `~/.media-porter/logs/mporter.log`
 
